@@ -2,6 +2,7 @@ from ignite.engine import Engine
 from ignite.metrics import ConfusionMatrix
 from ignite.metrics import mIoU
 from ignite.metrics import Metric
+from ignite.metrics import Accuracy
 from ignite.exceptions import NotComputableError
 from ignite.metrics.metric import sync_all_reduce, reinit__is_reduced
 from ignite.engine import Events
@@ -209,7 +210,7 @@ class DeepResidualUNet(nn.Module):
         x = self.output(x)
         return x
 
-model = UNet(512, 32, inputChannels, 64, len(colorDict.keys()))
+model = DeepResidualUNet(512, 32, inputChannels, 64, len(colorDict.keys()))
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -485,7 +486,6 @@ def output_transform(output):
   y_pred = output['y_pred']
   y = output['label']
   return y_pred, y
-
 NUM_BINS = torch.tensor(5)
 evaluator = Engine(evaluation_step)
 trainer = Engine(train_step)
@@ -499,6 +499,8 @@ metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
 ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, output_transform)
 ECE.attach(evaluator, "ECE")
+ACC = Accuracy(output_transform)
+ACC.attach(evaluator, 'acc')
 # SCE = StaticCalibrationError(indexToIgnore, NUM_BINS, torch.tensor(len(colorDict.keys())), output_transform)
 # SCE.attach(evaluator, "SCE")
 # AECE = AdaptiveExpectedCalibrationError(NUM_BINS, output_transform)
@@ -519,7 +521,8 @@ def evaluator_on_epoch_completed(engine):
   # sce = engine.state.metrics['SCE']
   # aece = engine.state.metrics['AECE']
   # asce = engine.state.metrics['ASCE']
-  print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}'
+  acc = engine.state.metrics['acc']
+  print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}'
         #f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
         )
 trainer.run(train_loader, max_epochs=EPOCHS)
