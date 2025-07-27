@@ -16,9 +16,8 @@ from torch import nn
 import numpy as np
 
 from pathlib import Path
+
 p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
-
-
 
 """# 1. Image Preprocessing"""
 
@@ -46,7 +45,7 @@ del valLabel
 
 colorDict = {}
 i = 0
-label2D = labelTransformed.reshape(3, -1).transpose(0,1)
+label2D = labelTransformed.reshape(3, -1).transpose(0, 1)
 for color in label2D.unique(dim=0):
     colorDict[color] = i
     i += 1
@@ -56,15 +55,18 @@ for color in label2D.unique(dim=0):
 # 2. Dataset Setup
 """
 
+
 def labelTransformation(label, colorDictionary):
-  label = label.to(torch.int64)
-  label2D = label.reshape(3, -1).transpose(0,1)
-  indexMap = torch.zeros(label2D.shape[0])
-  for color, index in colorDictionary.items():
-    indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
-  indexMap = indexMap.to(torch.int64)
-  labelOHE = nn.functional.one_hot(indexMap, num_classes=len(colorDictionary.keys())).transpose(0, 1).reshape(len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
-  return labelOHE, indexMap.reshape(targetHeight, targetWidth)
+    label = label.to(torch.int64)
+    label2D = label.reshape(3, -1).transpose(0, 1)
+    indexMap = torch.zeros(label2D.shape[0])
+    for color, index in colorDictionary.items():
+        indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
+    indexMap = indexMap.to(torch.int64)
+    labelOHE = nn.functional.one_hot(indexMap, num_classes=len(colorDictionary.keys())).transpose(0, 1).reshape(
+        len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
+    return labelOHE, indexMap.reshape(targetHeight, targetWidth)
+
 
 N = 200
 valN = 200
@@ -79,19 +81,23 @@ datasetTransformation = v2.Compose(
 inputTransformation = v2.Compose(
     [
         v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229,0.224,0.225]),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
+
+
 def generateDataset(N, img, label):
-  dataset = []
-  for i in range(N):
-      sampleImg, sampleLabel = datasetTransformation(img, label)
-      sampleImg = inputTransformation(sampleImg)
-      dataObject = {}
-      dataObject['img'] = sampleImg
-      dataObject['label'] = labelTransformation(sampleLabel, colorDict)
-      dataset.append(dataObject)
-  return dataset
+    dataset = []
+    for i in range(N):
+        sampleImg, sampleLabel = datasetTransformation(img, label)
+        sampleImg = inputTransformation(sampleImg)
+        dataObject = {}
+        dataObject['img'] = sampleImg
+        dataObject['label'] = labelTransformation(sampleLabel, colorDict)
+        dataset.append(dataObject)
+    return dataset
+
+
 trainDataset = generateDataset(N, imgTransformed, labelTransformed)
 valDataset = generateDataset(valN, valImgTransformed, valLabelTransformed)
 inputChannels = imgTransformed.shape[0]
@@ -100,14 +106,18 @@ del labelTransformed
 del valImgTransformed
 del valLabelTransformed
 
+
 class ImageDataset(Dataset):
     def __init__(self, dataset):
         self.data = dataset
         self.len = len(dataset)
+
     def __getitem__(self, idx):
         return self.data[idx]
+
     def __len__(self):
         return self.len
+
 
 train_dataset = ImageDataset(trainDataset)
 val_dataset = ImageDataset(valDataset)
@@ -119,35 +129,56 @@ LEARNING_RATE = 1e-04
 EPOCHS = 10
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-train_loader = DataLoader(train_dataset, batch_size = TRAIN_BATCH_SIZE, shuffle = True, num_workers = 0, drop_last=True)
-val_loader = DataLoader(valDataset, batch_size = VAL_BATCH_SIZE, shuffle = True, num_workers = 0, drop_last=True)
+train_loader = DataLoader(train_dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
+val_loader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
 
 """# 3. Model Setup"""
+
 
 class UNet(nn.Module):
     def __init__(self, image_size, min_size, input_channels, base_channels, out_length):
         super().__init__()
         self.contracting = nn.ModuleList()
-        self.contracting.append(nn.ModuleList(nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(), nn.Conv2d(base_channels, base_channels, kernel_size=(3,3), padding = 'same'), nn.ReLU())))
+        self.contracting.append(nn.ModuleList(
+            nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
+                          nn.Conv2d(base_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.ReLU())))
         current_size = (image_size) / 2
         current_channels = base_channels
         layer_count = 1
         while current_size != min_size:
             current_channels *= 2
-            self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size = (2, 2), stride = 2), nn.Conv2d(current_channels // 2, current_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding = 'same'), nn.ReLU())))
+            self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size=(2, 2), stride=2),
+                                                                nn.Conv2d(current_channels // 2, current_channels,
+                                                                          kernel_size=(3, 3), padding='same'),
+                                                                nn.ReLU(), nn.Conv2d(current_channels, current_channels,
+                                                                                     kernel_size=(3, 3),
+                                                                                     padding='same'), nn.ReLU())))
             current_size = (current_size) / 2
             layer_count += 1
         current_channels *= 2
-        self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size = (2, 2), stride = 2), nn.Conv2d(current_channels // 2, current_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding = 'same'), nn.ReLU())))
+        self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size=(2, 2), stride=2),
+                                                            nn.Conv2d(current_channels // 2, current_channels,
+                                                                      kernel_size=(3, 3), padding='same'), nn.ReLU(),
+                                                            nn.Conv2d(current_channels, current_channels,
+                                                                      kernel_size=(3, 3), padding='same'), nn.ReLU())))
         self.expanding = nn.ModuleList()
-        self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'), nn.ReLU())))
+        self.expanding.append(nn.ModuleList(
+            nn.Sequential(nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
+                          nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'),
+                          nn.ReLU())))
         while layer_count > 0:
             current_channels //= 2
-            self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(current_channels*2, current_channels, kernel_size=(2,2), padding='same'),nn.Conv2d(current_channels * 2, current_channels, kernel_size=(3,3), padding = 'same'), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding = 'same'), nn.ReLU())))
+            self.expanding.append(nn.ModuleList(
+                nn.Sequential(nn.Conv2d(current_channels * 2, current_channels, kernel_size=(2, 2), padding='same'),
+                              nn.Conv2d(current_channels * 2, current_channels, kernel_size=(3, 3), padding='same'),
+                              nn.ReLU(),
+                              nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'),
+                              nn.ReLU())))
             layer_count -= 1
-        #TODO: determine if output channels == number of classes
-        self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(current_channels, out_length, kernel_size = (1, 1)))))
+        # TODO: determine if output channels == number of classes
+        self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(current_channels, out_length, kernel_size=(1, 1)))))
         self.skip_list = []
+
     def forward(self, x):
         for model_list in self.contracting:
             for block in model_list:
@@ -159,45 +190,86 @@ class UNet(nn.Module):
                 x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
             x = model_list[0](x)
             if len(model_list) > 1 and i > 0:
-                #crop_size = (self.skip_list[-i].shape[-1] - x.shape[-1]) // 2
-                #TODO: check crop size for off by 1 errors
-                x = torch.cat((self.skip_list[-i], x), dim = 1)
+                # crop_size = (self.skip_list[-i].shape[-1] - x.shape[-1]) // 2
+                # TODO: check crop size for off by 1 errors
+                x = torch.cat((self.skip_list[-i], x), dim=1)
             for block in model_list[1:]:
                 x = block(x)
         self.skip_list = []
         return x
 
+
 class DeepResidualUNet(nn.Module):
     def __init__(self, image_size, min_size, input_channels, base_channels, out_length):
-      #Add Convolutional Layers with Kernel 1 Stride 1 Padding same to increase channels of residual input
+        # Add Convolutional Layers with Kernel 1 Stride 1 Padding same to increase channels of residual input
         super().__init__()
-        self.encoding1 = nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.BatchNorm2d(base_channels), nn.ReLU(), nn.Conv2d(base_channels, base_channels, kernel_size=(3,3), padding = 'same'))
-        self.upproject1 = nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(1,1), stride=1, padding='same'), nn.BatchNorm2d(base_channels))
+        self.encoding1 = nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'),
+                                       nn.BatchNorm2d(base_channels), nn.ReLU(),
+                                       nn.Conv2d(base_channels, base_channels, kernel_size=(3, 3), padding='same'))
+        self.upproject1 = nn.Sequential(
+            nn.Conv2d(input_channels, base_channels, kernel_size=(1, 1), stride=1, padding='same'),
+            nn.BatchNorm2d(base_channels))
         current_channels = base_channels * 2
-        self.encoding2 = nn.Sequential(nn.BatchNorm2d(base_channels), nn.ReLU(), nn.Conv2d(base_channels, current_channels, kernel_size=(3,3), stride = 2, padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.upproject2 = nn.Sequential(nn.Conv2d(current_channels//2, current_channels, kernel_size=(1,1), stride=2), nn.BatchNorm2d(current_channels))
+        self.encoding2 = nn.Sequential(nn.BatchNorm2d(base_channels), nn.ReLU(),
+                                       nn.Conv2d(base_channels, current_channels, kernel_size=(3, 3), stride=2,
+                                                 padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(),
+                                       nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3),
+                                                 padding='same'))
+        self.upproject2 = nn.Sequential(
+            nn.Conv2d(current_channels // 2, current_channels, kernel_size=(1, 1), stride=2),
+            nn.BatchNorm2d(current_channels))
         current_channels *= 2
-        self.encoding3 = nn.Sequential(nn.BatchNorm2d(current_channels//2), nn.ReLU(), nn.Conv2d(current_channels//2, current_channels, kernel_size=(3,3), stride = 2, padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.upproject3 = nn.Sequential(nn.Conv2d(current_channels//2, current_channels, kernel_size=(1,1), stride=2), nn.BatchNorm2d(current_channels))
+        self.encoding3 = nn.Sequential(nn.BatchNorm2d(current_channels // 2), nn.ReLU(),
+                                       nn.Conv2d(current_channels // 2, current_channels, kernel_size=(3, 3), stride=2,
+                                                 padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(),
+                                       nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3),
+                                                 padding='same'))
+        self.upproject3 = nn.Sequential(
+            nn.Conv2d(current_channels // 2, current_channels, kernel_size=(1, 1), stride=2),
+            nn.BatchNorm2d(current_channels))
         current_channels *= 2
-        self.bridge = nn.Sequential(nn.BatchNorm2d(current_channels//2), nn.ReLU(), nn.Conv2d(current_channels//2, current_channels, kernel_size=(3,3), stride=2, padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.upproject4 = nn.Sequential(nn.Conv2d(current_channels//2, current_channels, kernel_size=(1,1), stride=2), nn.BatchNorm2d(current_channels))
-        current_channels //=2
-        self.decoding1 = nn.Sequential(nn.BatchNorm2d(current_channels*2+current_channels), nn.ReLU(), nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(3,3), padding='same'), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.downproject1 = nn.Sequential(nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(1,1)), nn.BatchNorm2d(current_channels))
-        current_channels //=2
-        self.decoding2 = nn.Sequential(nn.BatchNorm2d(current_channels*2+current_channels), nn.ReLU(), nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(3,3), padding='same'), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.downproject2 = nn.Sequential(nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(1,1)), nn.BatchNorm2d(current_channels))
-        current_channels //=2
-        self.decoding3 = nn.Sequential(nn.BatchNorm2d(current_channels*2+current_channels), nn.ReLU(), nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(3,3), padding='same'), nn.BatchNorm2d(current_channels), nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3,3), padding='same'))
-        self.downproject3 = nn.Sequential(nn.Conv2d(current_channels*2+current_channels, current_channels, kernel_size=(1,1)), nn.BatchNorm2d(current_channels))
-        self.output = nn.Conv2d(base_channels, out_length, kernel_size=(1,1))
+        self.bridge = nn.Sequential(nn.BatchNorm2d(current_channels // 2), nn.ReLU(),
+                                    nn.Conv2d(current_channels // 2, current_channels, kernel_size=(3, 3), stride=2,
+                                              padding=1), nn.BatchNorm2d(current_channels), nn.ReLU(),
+                                    nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'))
+        self.upproject4 = nn.Sequential(
+            nn.Conv2d(current_channels // 2, current_channels, kernel_size=(1, 1), stride=2),
+            nn.BatchNorm2d(current_channels))
+        current_channels //= 2
+        self.decoding1 = nn.Sequential(nn.BatchNorm2d(current_channels * 2 + current_channels), nn.ReLU(),
+                                       nn.Conv2d(current_channels * 2 + current_channels, current_channels,
+                                                 kernel_size=(3, 3), padding='same'), nn.BatchNorm2d(current_channels),
+                                       nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3),
+                                                            padding='same'))
+        self.downproject1 = nn.Sequential(
+            nn.Conv2d(current_channels * 2 + current_channels, current_channels, kernel_size=(1, 1)),
+            nn.BatchNorm2d(current_channels))
+        current_channels //= 2
+        self.decoding2 = nn.Sequential(nn.BatchNorm2d(current_channels * 2 + current_channels), nn.ReLU(),
+                                       nn.Conv2d(current_channels * 2 + current_channels, current_channels,
+                                                 kernel_size=(3, 3), padding='same'), nn.BatchNorm2d(current_channels),
+                                       nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3),
+                                                            padding='same'))
+        self.downproject2 = nn.Sequential(
+            nn.Conv2d(current_channels * 2 + current_channels, current_channels, kernel_size=(1, 1)),
+            nn.BatchNorm2d(current_channels))
+        current_channels //= 2
+        self.decoding3 = nn.Sequential(nn.BatchNorm2d(current_channels * 2 + current_channels), nn.ReLU(),
+                                       nn.Conv2d(current_channels * 2 + current_channels, current_channels,
+                                                 kernel_size=(3, 3), padding='same'), nn.BatchNorm2d(current_channels),
+                                       nn.ReLU(), nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3),
+                                                            padding='same'))
+        self.downproject3 = nn.Sequential(
+            nn.Conv2d(current_channels * 2 + current_channels, current_channels, kernel_size=(1, 1)),
+            nn.BatchNorm2d(current_channels))
+        self.output = nn.Conv2d(base_channels, out_length, kernel_size=(1, 1))
+
     def forward(self, x):
         x1 = self.encoding1(x) + self.upproject1(x)
         x2 = self.encoding2(x1) + self.upproject2(x1)
         x3 = self.encoding3(x2) + self.upproject3(x2)
         x = self.bridge(x3) + self.upproject4(x3)
-        #Possibly Replace Upsample (and downproject) with ConvTranspose with Kernel and Stride 2
+        # Possibly Replace Upsample (and downproject) with ConvTranspose with Kernel and Stride 2
         x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
         x = torch.cat((x3, x), dim=1)
         x = self.decoding1(x) + self.downproject1(x)
@@ -210,35 +282,40 @@ class DeepResidualUNet(nn.Module):
         x = self.output(x)
         return x
 
+
 model = DeepResidualUNet(512, 32, inputChannels, 64, len(colorDict.keys()))
 model = model.to(device)
 
 """# 4. Model Training"""
 
 lossFunction = nn.CrossEntropyLoss()
-optimizer = torch.optim.AdamW(params = model.parameters(), lr = LEARNING_RATE)
+optimizer = torch.optim.AdamW(params=model.parameters(), lr=LEARNING_RATE)
+
 
 def train_step(engine, batch):
-  img = batch['img']
-  labelOHE, label = batch['label']
-  img = img.to(device)
-  labelOHE = labelOHE.to(device)
-  label = label.to(device).to(torch.int64)
-  optimizer.zero_grad()
-  y_pred = model(img).squeeze(1)
-  loss = lossFunction(y_pred, labelOHE)
-  loss.backward()
-  optimizer.step()
-  return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
+    img = batch['img']
+    labelOHE, label = batch['label']
+    img = img.to(device)
+    labelOHE = labelOHE.to(device)
+    label = label.to(device).to(torch.int64)
+    optimizer.zero_grad()
+    y_pred = model(img).squeeze(1)
+    loss = lossFunction(y_pred, labelOHE)
+    loss.backward()
+    optimizer.step()
+    return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
+
+
 def evaluation_step(engine, batch):
-  img = batch['img']
-  labelOHE, label = batch['label']
-  img = img.to(device)
-  labelOHE = labelOHE.to(device)
-  label = label.to(device).to(torch.int64)
-  y_pred = model(img).squeeze(1)
-  loss = lossFunction(y_pred, labelOHE)
-  return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
+    img = batch['img']
+    labelOHE, label = batch['label']
+    img = img.to(device)
+    labelOHE = labelOHE.to(device)
+    label = label.to(device).to(torch.int64)
+    y_pred = model(img).squeeze(1)
+    loss = lossFunction(y_pred, labelOHE)
+    return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
+
 
 """def train(model, epochs, lossFunction, learningRate, verbose = True, scheduler = None, optimizer = None):
     if optimizer is None:
@@ -304,6 +381,7 @@ def evaluation_step(engine, batch):
 # 5. Evaluation Metrics
 """
 
+
 class ExpectedCalibrationError(Metric):
     def __init__(self, ignoredClass, numBins, outputTransform=lambda x: x, device="cpu"):
         self.ignoredClass = ignoredClass
@@ -333,7 +411,7 @@ class ExpectedCalibrationError(Metric):
         correct = torch.eq(indices, y_filtered).reshape(-1)
         confidences = confidences.values[mask]
         for bin in range(self.numBins):
-            mask = torch.logical_and((bin/self.numBins) < confidences,  confidences < ((bin + 1)/self.numBins))
+            mask = torch.logical_and((bin / self.numBins) < confidences, confidences < ((bin + 1) / self.numBins))
 
             self._num_correct[bin] += torch.sum(correct[mask]).to(self._device)
             self._num_examples[bin] += torch.sum(mask).to(self._device)
@@ -341,13 +419,17 @@ class ExpectedCalibrationError(Metric):
 
     @sync_all_reduce("_num_examples:SUM", "_num_correct:SUM", "_accumulated_confidence:SUM")
     def compute(self):
-      if torch.any(self._num_examples == 0):
-          raise NotComputableError("ExpectedCalibrationError must have at least one example per bin before it can be computed")
-      #Possibly set Error to 0 if no items in bin, and just require at least one sample
-      ECE = 0
-      for bin in range(self.numBins):
-          ECE += (self._num_examples[bin] / torch.sum(self._num_examples)) * torch.abs((self._num_correct[bin] / self._num_examples[bin]) - (self._accumulated_confidence[bin] / self._num_examples[bin]))
-      return ECE
+        if torch.any(self._num_examples == 0):
+            raise NotComputableError(
+                "ExpectedCalibrationError must have at least one example per bin before it can be computed")
+        # Possibly set Error to 0 if no items in bin, and just require at least one sample
+        ECE = 0
+        for bin in range(self.numBins):
+            ECE += (self._num_examples[bin] / torch.sum(self._num_examples)) * torch.abs(
+                (self._num_correct[bin] / self._num_examples[bin]) - (
+                            self._accumulated_confidence[bin] / self._num_examples[bin]))
+        return ECE
+
 
 class StaticCalibrationError(Metric):
     def __init__(self, ignoredClass, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
@@ -383,31 +465,35 @@ class StaticCalibrationError(Metric):
                 continue
             correct = torch.eq(indices, classIndex).reshape(-1)
             for bin in range(self.numBins):
-                mask = torch.logical_and((bin/self.numBins) < y_pred[classIndex, :], y_pred[classIndex, :] < ((bin + 1)/self.numBins))
+                mask = torch.logical_and((bin / self.numBins) < y_pred[classIndex, :],
+                                         y_pred[classIndex, :] < ((bin + 1) / self.numBins))
                 self._num_correct[bin, classIndex] += torch.sum(correct[mask]).to(self._device)
                 self._num_examples[bin, classIndex] += torch.sum(mask).to(self._device)
                 self._accumulated_confidence[bin, classIndex] += torch.sum(y_pred[classIndex, :][mask]).to(self._device)
 
     @sync_all_reduce("_num_examples:SUM", "_num_correct:SUM", "_accumulated_confidence:SUM")
     def compute(self):
-      if torch.sum(self._num_examples) == 0:
-          raise NotComputableError("StaticCalibrationError must have at least one example before it can be computed")
+        if torch.sum(self._num_examples) == 0:
+            raise NotComputableError("StaticCalibrationError must have at least one example before it can be computed")
 
-      SCE = 0
+        SCE = 0
 
-      for classIndex in range(self.numClasses):
-          if classIndex == self.ignoredClass:
-              continue
-          for bin in range(self.numBins):
-              if self._num_examples[bin, classIndex] == 0:
-                  continue
-              SCE += (self._num_examples[bin, classIndex] / torch.sum(self._num_examples)) * torch.abs((self._num_correct[bin, classIndex] / self._num_examples[bin, classIndex]) - (self._accumulated_confidence[bin, classIndex] / self._num_examples[bin, classIndex]))
+        for classIndex in range(self.numClasses):
+            if classIndex == self.ignoredClass:
+                continue
+            for bin in range(self.numBins):
+                if self._num_examples[bin, classIndex] == 0:
+                    continue
+                SCE += (self._num_examples[bin, classIndex] / torch.sum(self._num_examples)) * torch.abs(
+                    (self._num_correct[bin, classIndex] / self._num_examples[bin, classIndex]) - (
+                                self._accumulated_confidence[bin, classIndex] / self._num_examples[bin, classIndex]))
 
-      if self.ignoredClass != -1:
-          SCE = (1/(self.numClasses - 1)) * SCE
-      else:
-          SCE = (1/self.numClasses) * SCE
-      return SCE
+        if self.ignoredClass != -1:
+            SCE = (1 / (self.numClasses - 1)) * SCE
+        else:
+            SCE = (1 / self.numClasses) * SCE
+        return SCE
+
 
 class AdaptiveExpectedCalibrationError(Metric):
     def __init__(self, numBins, outputTransform=lambda x: x, device="cpu"):
@@ -431,19 +517,22 @@ class AdaptiveExpectedCalibrationError(Metric):
         self._data = torch.cat((torch.stack((confidences, correct), dim=1), self._data), dim=0)
 
     def compute(self):
-      if self._data.shape[0] == 0:
-          raise NotComputableError("AdaptiveExpectedCalibrationError must have at least one example before it can be computed")
-      sortedData = self._data[:, 0].clone().sort().values
-      boundaries = torch.zeros(self.numBins)
-      for bin in range(self.numBins):
-          boundaries[bin] = sortedData[torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
-      indexTensor = torch.bucketize(sortedData, boundaries)
-      AECE = 0
-      for bin in range(self.numBins):
-          mask = indexTensor == bin
-          AECE += torch.abs((torch.sum(self._data[:, 1][mask]) / torch.sum(mask)) - (torch.sum(self._data[:, 0][mask]) / torch.sum(mask)))
-      AECE *= 1 / self.numBins
-      return AECE
+        if self._data.shape[0] == 0:
+            raise NotComputableError(
+                "AdaptiveExpectedCalibrationError must have at least one example before it can be computed")
+        sortedData = self._data[:, 0].clone().sort().values
+        boundaries = torch.zeros(self.numBins)
+        for bin in range(self.numBins):
+            boundaries[bin] = sortedData[torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
+        indexTensor = torch.bucketize(sortedData, boundaries)
+        AECE = 0
+        for bin in range(self.numBins):
+            mask = indexTensor == bin
+            AECE += torch.abs((torch.sum(self._data[:, 1][mask]) / torch.sum(mask)) - (
+                        torch.sum(self._data[:, 0][mask]) / torch.sum(mask)))
+        AECE *= 1 / self.numBins
+        return AECE
+
 
 class AdaptiveStaticCalibrationError(Metric):
     def __init__(self, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
@@ -467,33 +556,39 @@ class AdaptiveStaticCalibrationError(Metric):
         self._data = torch.cat((torch.cat((y_pred, correct), dim=1), self._data), dim=0)
 
     def compute(self):
-      if self._data.numel == 0:
-          raise NotComputableError("AdaptiveStaticCalibrationError must have at least one example before it can be computed")
-      ASCE = 0
-      for classIndex in range(self.numClasses):
-          sortedData = self._data[:, classIndex].clone().sort().values
-          boundaries = torch.zeros(self.numBins)
-          for bin in range(self.numBins):
-              boundaries[bin] = sortedData[torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
-          indexTensor = torch.bucketize(sortedData, boundaries)
-          for bin in range(self.numBins):
-              mask = indexTensor == bin
-              ASCE += torch.abs((torch.sum(self._data[:, -1][mask]) / torch.sum(mask)) - (torch.sum(self._data[:, classIndex][mask]) / torch.sum(mask)))
-      ASCE *= 1 / (self.numClasses * self.numBins)
-      return ASCE
+        if self._data.numel == 0:
+            raise NotComputableError(
+                "AdaptiveStaticCalibrationError must have at least one example before it can be computed")
+        ASCE = 0
+        for classIndex in range(self.numClasses):
+            sortedData = self._data[:, classIndex].clone().sort().values
+            boundaries = torch.zeros(self.numBins)
+            for bin in range(self.numBins):
+                boundaries[bin] = sortedData[
+                    torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
+            indexTensor = torch.bucketize(sortedData, boundaries)
+            for bin in range(self.numBins):
+                mask = indexTensor == bin
+                ASCE += torch.abs((torch.sum(self._data[:, -1][mask]) / torch.sum(mask)) - (
+                            torch.sum(self._data[:, classIndex][mask]) / torch.sum(mask)))
+        ASCE *= 1 / (self.numClasses * self.numBins)
+        return ASCE
+
 
 def output_transform(output):
-  y_pred = output['y_pred']
-  y = output['label']
-  return y_pred, y
+    y_pred = output['y_pred']
+    y = output['label']
+    return y_pred, y
+
+
 NUM_BINS = torch.tensor(5)
 evaluator = Engine(evaluation_step)
 trainer = Engine(train_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
 indexToIgnore = -1
 for color, index in colorDict.items():
-  if torch.allclose(color, torch.tensor([255,255,255]).to(torch.uint8)):
-    indexToIgnore = index
+    if torch.allclose(color, torch.tensor([255, 255, 255]).to(torch.uint8)):
+        indexToIgnore = index
 assert indexToIgnore != -1
 metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
@@ -501,6 +596,8 @@ ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, output_transform)
 ECE.attach(evaluator, "ECE")
 ACC = Accuracy(output_transform)
 ACC.attach(evaluator, 'acc')
+
+
 # SCE = StaticCalibrationError(indexToIgnore, NUM_BINS, torch.tensor(len(colorDict.keys())), output_transform)
 # SCE.attach(evaluator, "SCE")
 # AECE = AdaptiveExpectedCalibrationError(NUM_BINS, output_transform)
@@ -509,23 +606,43 @@ ACC.attach(evaluator, 'acc')
 # ASCE.attach(evaluator, "ASCE")
 @trainer.on(Events.EPOCH_COMPLETED)
 def trainer_on_epoch_completed(engine):
-  epoch = engine.state.epoch
-  loss = engine.state.output['loss']
-  print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-  evaluator.run(val_loader, max_epochs=1)
+    epoch = engine.state.epoch
+    loss = engine.state.output['loss']
+    print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
+    evaluator.run(val_loader, max_epochs=1)
+
+
 @evaluator.on(Events.EPOCH_COMPLETED)
 def evaluator_on_epoch_completed(engine):
-  loss = engine.state.output['loss']
-  miou = engine.state.metrics['miou']
-  ece = engine.state.metrics['ECE']
-  # sce = engine.state.metrics['SCE']
-  # aece = engine.state.metrics['AECE']
-  # asce = engine.state.metrics['ASCE']
-  acc = engine.state.metrics['acc']
-  print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}'
-        #f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
-        )
+    loss = engine.state.output['loss']
+    miou = engine.state.metrics['miou']
+    ece = engine.state.metrics['ECE']
+    # sce = engine.state.metrics['SCE']
+    # aece = engine.state.metrics['AECE']
+    # asce = engine.state.metrics['ASCE']
+    acc = engine.state.metrics['acc']
+    print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}'
+          # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
+          )
+
+
 trainer.run(train_loader, max_epochs=EPOCHS)
 
 """{'miou': 0.06197101828009659, 'ECE': 0.41888636350631714}"""
 
+
+def calibrate(model: nn.Module, learningRate=1e-4, epochs=1):
+    global optimizer
+    model.eval()
+    temperature = torch.tensor(1, requires_grad=True)
+    temp = optimizer
+    localOptimizer = torch.optim.AdamW(temperature, lr=learningRate)
+    optimizer = localOptimizer
+    engine = Engine(train_step)
+    model.requires_grad_(False)
+    engine.run(val_loader, max_epochs=epochs)
+
+    # Reset Previous State
+    model.requires_grad_(True)
+    optimizer = temp
+    return temperature
