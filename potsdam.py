@@ -12,51 +12,38 @@ import torch
 import torch.utils.data
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2
+from torchvision import tv_tensors
 from torch import nn
 import numpy as np
 
 from pathlib import Path
 
-p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
+# p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
 
 """# 1. Image Preprocessing"""
 
-labelPath = p / "top_potsdam_7_9_label.tif"
-imgPath = p / "top_potsdam_7_9_RGB.tif"
-valPath = p / "top_potsdam_7_8_RGB.tif"
-valLabelPath = p / "top_potsdam_7_8_label.tif"
-img = Image.open(imgPath)
-label = Image.open(labelPath)
-valImg = Image.open(imgPath)
-valLabel = Image.open(labelPath)
-
-transforms = v2.Compose(
+transformPILImageToTvTensorImage = v2.Compose(
     [
         v2.ToImage(),
     ]
 )
 
-imgTransformed, labelTransformed = transforms((img, label))
-del img
-del label
-valImgTransformed, valLabelTransformed = transforms((valImg, valLabel))
-del valImg
-del valLabel
-
-colorDict = {}
-i = 0
-label2D = labelTransformed.reshape(3, -1).transpose(0, 1)
-for color in label2D.unique(dim=0):
-    colorDict[color] = i
-    i += 1
+colorDict = {torch.tensor([0, 0, 255]): 0,
+             torch.tensor([0, 255, 0]): 1,
+             torch.tensor([0, 255, 255]): 2,
+             torch.tensor([255, 0, 0]): 3,
+             torch.tensor([255, 255, 0]): 4,
+             torch.tensor([255, 255, 255]): 5,}
+indexToIgnore = None
 
 """#TODO: Properly set ignore index
 
 # 2. Dataset Setup
 """
+targetHeight = 512
+targetWidth = 512
 
-
-def labelTransformation(label, colorDictionary):
+def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]):
     label = label.to(torch.int64)
     label2D = label.reshape(3, -1).transpose(0, 1)
     indexMap = torch.zeros(label2D.shape[0])
@@ -67,18 +54,7 @@ def labelTransformation(label, colorDictionary):
         len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
     return labelOHE, indexMap.reshape(targetHeight, targetWidth)
 
-
-N = 200
-valN = 200
-targetHeight = 512
-targetWidth = 512
-datasetTransformation = v2.Compose(
-    [
-        v2.RandomCrop((targetHeight, targetWidth)),
-        v2.RandomHorizontalFlip(0.5),
-    ]
-)
-inputTransformation = v2.Compose(
+transformInputImage = v2.Compose(
     [
         v2.ToDtype(torch.float32, scale=True),
         v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -86,26 +62,22 @@ inputTransformation = v2.Compose(
 )
 
 
-def generateDataset(N, img, label):
+def loadDataset(basePath: Path):
     dataset = []
-    for i in range(N):
-        sampleImg, sampleLabel = datasetTransformation(img, label)
-        sampleImg = inputTransformation(sampleImg)
-        dataObject = {}
-        dataObject['img'] = sampleImg
-        dataObject['label'] = labelTransformation(sampleLabel, colorDict)
+    pathGenerator = basePath.rglob('*.tif')
+    for path in pathGenerator:
+        img = Image.open(basePath / path.name)
+        label = Image.open(basePath / path.name.replace('rgb', 'label'))
+        imgTransformed = transformInputImage(transformPILImageToTvTensorImage(img))
+        labelTransformed = transformLabel(transformPILImageToTvTensorImage(label), colorDict)
+        dataObject = {'img': imgTransformed, 'label': labelTransformed}
         dataset.append(dataObject)
     return dataset
 
 
-trainDataset = generateDataset(N, imgTransformed, labelTransformed)
-valDataset = generateDataset(valN, valImgTransformed, valLabelTransformed)
-inputChannels = imgTransformed.shape[0]
-del imgTransformed
-del labelTransformed
-del valImgTransformed
-del valLabelTransformed
-
+trainDataset = loadDataset(Path('./trainImages'))
+valDataset = loadDataset(Path('./validationImages'))
+inputChannels = trainDataset[0]['img'].shape[0]
 
 class ImageDataset(Dataset):
     def __init__(self, dataset):
@@ -119,8 +91,8 @@ class ImageDataset(Dataset):
         return self.len
 
 
-train_dataset = ImageDataset(trainDataset)
-val_dataset = ImageDataset(valDataset)
+trainDataset = ImageDataset(trainDataset)
+valDataset = ImageDataset(valDataset)
 
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
@@ -129,78 +101,77 @@ LEARNING_RATE = 1e-04
 EPOCHS = 10
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-train_loader = DataLoader(train_dataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
-val_loader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
+trainLoader = DataLoader(trainDataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
+valLoader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
 
 """# 3. Model Setup"""
 
 
 class UNet(nn.Module):
-    def __init__(self, image_size, min_size, input_channels, base_channels, out_length):
+    def __init__(self, imageSize, minSize, inputChannels, baseChannels, outLength):
         super().__init__()
         self.contracting = nn.ModuleList()
         self.contracting.append(nn.ModuleList(
-            nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
-                          nn.Conv2d(base_channels, base_channels, kernel_size=(3, 3), padding='same'), nn.ReLU())))
-        current_size = (image_size) / 2
-        current_channels = base_channels
+            nn.Sequential(nn.Conv2d(inputChannels, baseChannels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
+                          nn.Conv2d(baseChannels, baseChannels, kernel_size=(3, 3), padding='same'), nn.ReLU())))
+        currentSize = (imageSize) / 2
+        currentChannels = baseChannels
         layer_count = 1
-        while current_size != min_size:
-            current_channels *= 2
+        while currentSize != minSize:
+            currentChannels *= 2
             self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size=(2, 2), stride=2),
-                                                                nn.Conv2d(current_channels // 2, current_channels,
+                                                                nn.Conv2d(currentChannels // 2, currentChannels,
                                                                           kernel_size=(3, 3), padding='same'),
-                                                                nn.ReLU(), nn.Conv2d(current_channels, current_channels,
+                                                                nn.ReLU(), nn.Conv2d(currentChannels, currentChannels,
                                                                                      kernel_size=(3, 3),
                                                                                      padding='same'), nn.ReLU())))
-            current_size = (current_size) / 2
+            currentSize = (currentSize) / 2
             layer_count += 1
-        current_channels *= 2
+        currentChannels *= 2
         self.contracting.append(nn.ModuleList(nn.Sequential(nn.MaxPool2d(kernel_size=(2, 2), stride=2),
-                                                            nn.Conv2d(current_channels // 2, current_channels,
+                                                            nn.Conv2d(currentChannels // 2, currentChannels,
                                                                       kernel_size=(3, 3), padding='same'), nn.ReLU(),
-                                                            nn.Conv2d(current_channels, current_channels,
+                                                            nn.Conv2d(currentChannels, currentChannels,
                                                                       kernel_size=(3, 3), padding='same'), nn.ReLU())))
         self.expanding = nn.ModuleList()
         self.expanding.append(nn.ModuleList(
-            nn.Sequential(nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
-                          nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'),
+            nn.Sequential(nn.Conv2d(currentChannels, currentChannels, kernel_size=(3, 3), padding='same'), nn.ReLU(),
+                          nn.Conv2d(currentChannels, currentChannels, kernel_size=(3, 3), padding='same'),
                           nn.ReLU())))
         while layer_count > 0:
-            current_channels //= 2
+            currentChannels //= 2
             self.expanding.append(nn.ModuleList(
-                nn.Sequential(nn.Conv2d(current_channels * 2, current_channels, kernel_size=(2, 2), padding='same'),
-                              nn.Conv2d(current_channels * 2, current_channels, kernel_size=(3, 3), padding='same'),
+                nn.Sequential(nn.Conv2d(currentChannels * 2, currentChannels, kernel_size=(2, 2), padding='same'),
+                              nn.Conv2d(currentChannels * 2, currentChannels, kernel_size=(3, 3), padding='same'),
                               nn.ReLU(),
-                              nn.Conv2d(current_channels, current_channels, kernel_size=(3, 3), padding='same'),
+                              nn.Conv2d(currentChannels, currentChannels, kernel_size=(3, 3), padding='same'),
                               nn.ReLU())))
             layer_count -= 1
-        # TODO: determine if output channels == number of classes
-        self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(current_channels, out_length, kernel_size=(1, 1)))))
+        self.expanding.append(nn.ModuleList(nn.Sequential(nn.Conv2d(currentChannels, outLength, kernel_size=(1, 1)))))
         self.skip_list = []
 
     def forward(self, x):
-        for model_list in self.contracting:
-            for block in model_list:
+        for moduleList in self.contracting:
+            for block in moduleList:
                 x = block(x)
             self.skip_list.append(x)
         self.skip_list.pop()
-        for i, model_list in enumerate(self.expanding):
-            if len(model_list) > 1 and i > 0:
+        for i, moduleList in enumerate(self.expanding):
+            if len(moduleList) > 1 and i > 0:
                 x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
-            x = model_list[0](x)
-            if len(model_list) > 1 and i > 0:
+            x = moduleList[0](x)
+            if len(moduleList) > 1 and i > 0:
                 # crop_size = (self.skip_list[-i].shape[-1] - x.shape[-1]) // 2
                 # TODO: check crop size for off by 1 errors
                 x = torch.cat((self.skip_list[-i], x), dim=1)
-            for block in model_list[1:]:
+            for block in moduleList[1:]:
                 x = block(x)
         self.skip_list = []
         return x
 
 
 class DeepResidualUNet(nn.Module):
-    def __init__(self, image_size, min_size, input_channels, base_channels, out_length):
+    def __init__(self, input_channels, base_channels, out_length):
         # Add Convolutional Layers with Kernel 1 Stride 1 Padding same to increase channels of residual input
         super().__init__()
         self.encoding1 = nn.Sequential(nn.Conv2d(input_channels, base_channels, kernel_size=(3, 3), padding='same'),
@@ -281,9 +252,75 @@ class DeepResidualUNet(nn.Module):
         x = self.decoding3(x) + self.downproject3(x)
         x = self.output(x)
         return x
-
-
-model = DeepResidualUNet(512, 32, inputChannels, 64, len(colorDict.keys()))
+class AtrousDenseUDeconvNet(nn.Module):
+    def __init__(self, inChannels, outChannels, dropoutChance=0.5):
+        super().__init__()
+        #TODO: test padding modes
+        self.l2 = nn.BatchNorm2d(inChannels)
+        self.l3 = nn.Conv2d(inChannels, 16, kernel_size=(3, 3), padding='same')
+        self.l4 = nn.Conv2d(16, 8, kernel_size=(3,3), padding='same', dilation=2)
+        self.l5 = nn.Conv2d(8, 16, kernel_size=(3,3), padding='same', dilation=5)
+        self.l6 = nn.Conv2d(16, 32, kernel_size=(3,3), padding='same', dilation=8)
+        self.l8To11 = nn.Sequential(nn.Conv2d(72, 64, kernel_size=(3,3), padding='same'),
+                                    nn.Dropout(dropoutChance),
+                                    nn.AvgPool2d(kernel_size=(2, 2)),
+                                    nn.BatchNorm2d(64))
+        self.l12 = nn.Conv2d(64, 32, kernel_size=(3,3), padding='same', dilation=2)
+        self.l13 = nn.Conv2d(32, 64, kernel_size=(3,3), padding='same', dilation=5)
+        self.l14 = nn.Conv2d(64, 128, kernel_size=(3,3), padding='same', dilation=8)
+        self.l16To21 = nn.Sequential(nn.Conv2d(288, 256, kernel_size=(3,3), padding='same'),
+                                 nn.Dropout(dropoutChance),
+                                 nn.AvgPool2d(kernel_size=(2,2)),
+                                 nn.BatchNorm2d(256),
+                                 nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'),
+                                 nn.Dropout(dropoutChance))
+        self.l22To24 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
+                                 nn.Conv2d(128, 256, kernel_size=(3,3), padding='same'),
+                                 nn.Dropout(dropoutChance))
+        self.l25To27 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
+                                 nn.Conv2d(256, 512, kernel_size=(3,3), padding='same'),
+                                 nn.Dropout(dropoutChance))
+        self.l28To32 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
+                                 nn.Conv2d(512, 1024, kernel_size=(3,3), padding='same'),
+                                 nn.Dropout(dropoutChance),
+                                 nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                                 nn.Conv2d(1024, 512, kernel_size=(3,3), padding='same'))
+        self.l34To36 = nn.Sequential(nn.Conv2d(1024, 512, kernel_size=(3,3), padding='same'),
+                                 nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                                 nn.Conv2d(512, 256, kernel_size=(3,3), padding='same'))
+        self.l38To40 = nn.Sequential(nn.Conv2d(512, 256, kernel_size=(3,3), padding='same'),
+                                 nn.Upsample(scale_factor=2.0, mode='bilinear'),
+                                 nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'))
+        # TODO: Check if ConvTranspose need Padding 1
+        self.l42To46 = nn.Sequential(nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'),
+                                 nn.ConvTranspose2d(128, 64, kernel_size=(3,3), stride=2),
+                                 nn.ConvTranspose2d(64, 64, kernel_size=(3,3)),
+                                 nn.ConvTranspose2d(64, 18, kernel_size=(3,3)),
+                                 nn.ConvTranspose2d(18, outChannels, kernel_size=(3,3)))
+    def forward(self, x):
+        x = self.l2(x)
+        x1 = self.l3(x)
+        x2 = self.l4(x1)
+        x3 = self.l5(x2)
+        x4 = self.l6(x3)
+        x = torch.cat((x1, x2, x3, x4), dim=1)
+        x1 = self.l8To11(x)
+        x2 = self.l12(x1)
+        x3 = self.l13(x2)
+        x4 = self.l14(x3)
+        x = torch.cat((x1, x2, x3, x4), dim=1)
+        x1 = self.l16To21(x)
+        x2 = self.l22To24(x1)
+        x3 = self.l25To27(x2)
+        x4 = self.l28To32(x3)
+        x = torch.cat((x3, x4), dim=1)
+        x = self.l34To36(x)
+        x = torch.cat((x2, x), dim=1)
+        x = self.l38To40(x)
+        x = torch.cat((x1, x), dim=1)
+        x = self.l42To46(x)
+        return x
+model = DeepResidualUNet(inputChannels, 64, len(colorDict.keys()))
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -326,7 +363,7 @@ def evaluation_step(engine, batch):
         aggregatedLoss = 0
         stepsPerPrint = 5
         epochsPerValidation = 1
-        for batch, data in enumerate(train_loader):
+        for batch, data in enumerate(trainLoader):
             img = data[:, 0]
             label = data[:, 1].to(torch.int64)
             img = img.to(device)
@@ -348,7 +385,7 @@ def evaluation_step(engine, batch):
                 valAggregatedMeanIoU = 0
                 steps = 0
                 iouSteps = 0
-                for batch, data in enumerate(val_loader):
+                for batch, data in enumerate(valLoader):
                     img = data[:, 0]
                     label = data[:, 1].to(torch.int64)
                     label2D = label.reshape(3, -1).transpose(0,1)
@@ -383,7 +420,7 @@ def evaluation_step(engine, batch):
 
 
 class ExpectedCalibrationError(Metric):
-    def __init__(self, ignoredClass, numBins, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, ignoredClass, numBins: torch.Tensor, outputTransform=lambda x: x, device="cpu"):
         self.ignoredClass = ignoredClass
         self.numBins = numBins
         self._num_correct = torch.zeros(numBins)
@@ -409,9 +446,9 @@ class ExpectedCalibrationError(Metric):
         y_filtered = y[mask]
         indices = indices[mask]
         correct = torch.eq(indices, y_filtered).reshape(-1)
-        confidences = confidences.values[mask]
+        confidences = confidences.values[mask].reshape(-1)
         for bin in range(self.numBins):
-            mask = torch.logical_and((bin / self.numBins) < confidences, confidences < ((bin + 1) / self.numBins))
+            mask = torch.logical_and((bin / self.numBins) < confidences, confidences <= ((bin + 1) / self.numBins))
 
             self._num_correct[bin] += torch.sum(correct[mask]).to(self._device)
             self._num_examples[bin] += torch.sum(mask).to(self._device)
@@ -419,12 +456,14 @@ class ExpectedCalibrationError(Metric):
 
     @sync_all_reduce("_num_examples:SUM", "_num_correct:SUM", "_accumulated_confidence:SUM")
     def compute(self):
-        if torch.any(self._num_examples == 0):
+        if torch.sum(self._num_examples) == 0:
             raise NotComputableError(
                 "ExpectedCalibrationError must have at least one example per bin before it can be computed")
         # Possibly set Error to 0 if no items in bin, and just require at least one sample
         ECE = 0
         for bin in range(self.numBins):
+            if self._num_examples[bin] == 0:
+                continue
             ECE += (self._num_examples[bin] / torch.sum(self._num_examples)) * torch.abs(
                 (self._num_correct[bin] / self._num_examples[bin]) - (
                             self._accumulated_confidence[bin] / self._num_examples[bin]))
@@ -585,11 +624,6 @@ NUM_BINS = torch.tensor(5)
 evaluator = Engine(evaluation_step)
 trainer = Engine(train_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
-indexToIgnore = -1
-for color, index in colorDict.items():
-    if torch.allclose(color, torch.tensor([255, 255, 255]).to(torch.uint8)):
-        indexToIgnore = index
-assert indexToIgnore != -1
 metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
 ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, output_transform)
@@ -609,7 +643,7 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    evaluator.run(val_loader, max_epochs=1)
+    evaluator.run(valLoader, max_epochs=1)
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -625,24 +659,8 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-
-trainer.run(train_loader, max_epochs=EPOCHS)
-
+trainer.run(trainLoader, max_epochs=1)
+# model.load_state_dict(torch.load('DeepResidual_CalibrationTest', weights_only=True))
 """{'miou': 0.06197101828009659, 'ECE': 0.41888636350631714}"""
 
 
-def calibrate(model: nn.Module, learningRate=1e-4, epochs=1):
-    global optimizer
-    model.eval()
-    temperature = torch.tensor(1, requires_grad=True)
-    temp = optimizer
-    localOptimizer = torch.optim.AdamW(temperature, lr=learningRate)
-    optimizer = localOptimizer
-    engine = Engine(train_step)
-    model.requires_grad_(False)
-    engine.run(val_loader, max_epochs=epochs)
-
-    # Reset Previous State
-    model.requires_grad_(True)
-    optimizer = temp
-    return temperature

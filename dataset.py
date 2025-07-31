@@ -21,7 +21,7 @@ for path in pathlist:
 trainNumber = np.ceil(len(paths) * 0.6)
 testNumber = np.ceil(len(paths) * 0.2)
 valNumber = len(paths) - trainNumber - testNumber
-N = 100
+N = 10
 targetHeight = 512
 targetWidth = 512
 toImageTransform = v2.Compose(
@@ -38,7 +38,7 @@ datasetTransformation = v2.Compose(
 inputTransformation = v2.Compose(
     [
         v2.ToDtype(torch.float32, scale=True),
-        # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229,0.224,0.225]),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229,0.224,0.225]),
     ]
 )
 for index, path in enumerate(paths):
@@ -50,5 +50,5 @@ for index, path in enumerate(paths):
     for i in range(N):
         sampleImg, sampleLabel = datasetTransformation(img, label)
         sampleImg = inputTransformation(sampleImg)
-        v2.ToPILImage()(sampleImg).save(savePath / (path.stem[:-3] + str(i) + '.tif'))
+        v2.ToPILImage()(sampleImg).save(savePath / (path.stem[:-3] + str(i) + '_rgb.tif'))
         v2.ToPILImage()(sampleLabel).save(savePath / (path.stem[:-3] + str(i) + '_label.tif'))
