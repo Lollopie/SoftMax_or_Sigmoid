@@ -293,10 +293,10 @@ class AtrousDenseUDeconvNet(nn.Module):
                                  nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'))
         # TODO: Check if ConvTranspose need Padding 1
         self.l42To46 = nn.Sequential(nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'),
-                                 nn.ConvTranspose2d(128, 64, kernel_size=(3,3), stride=2),
-                                 nn.ConvTranspose2d(64, 64, kernel_size=(3,3)),
-                                 nn.ConvTranspose2d(64, 18, kernel_size=(3,3)),
-                                 nn.ConvTranspose2d(18, outChannels, kernel_size=(3,3)))
+                                     nn.ConvTranspose2d(128, 64, kernel_size=(3,3), stride=2, padding=1, output_padding=1),
+                                     nn.ConvTranspose2d(64, 64, kernel_size=(3,3), padding=1),
+                                     nn.ConvTranspose2d(64, 18, kernel_size=(3,3), stride=2, padding=1, output_padding=1),
+                                     nn.ConvTranspose2d(18, outChannels, kernel_size=(3,3), padding=1))
     def forward(self, x):
         x = self.l2(x)
         x1 = self.l3(x)
@@ -320,7 +320,7 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = DeepResidualUNet(inputChannels, 64, len(colorDict.keys()))
+model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
 model = model.to(device)
 
 """# 4. Model Training"""
