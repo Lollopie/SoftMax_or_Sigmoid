@@ -34,7 +34,7 @@ colorDict = {torch.tensor([0, 0, 255]): 0,
              torch.tensor([255, 0, 0]): 3,
              torch.tensor([255, 255, 0]): 4,
              torch.tensor([255, 255, 255]): 5,}
-indexToIgnore = None
+indexToIgnore = 3
 
 """#TODO: Properly set ignore index
 
@@ -161,8 +161,6 @@ class UNet(nn.Module):
                 x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
             x = moduleList[0](x)
             if len(moduleList) > 1 and i > 0:
-                # crop_size = (self.skip_list[-i].shape[-1] - x.shape[-1]) // 2
-                # TODO: check crop size for off by 1 errors
                 x = torch.cat((self.skip_list[-i], x), dim=1)
             for block in moduleList[1:]:
                 x = block(x)
@@ -291,7 +289,6 @@ class AtrousDenseUDeconvNet(nn.Module):
         self.l38To40 = nn.Sequential(nn.Conv2d(512, 256, kernel_size=(3,3), padding='same'),
                                  nn.Upsample(scale_factor=2.0, mode='bilinear'),
                                  nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'))
-        # TODO: Check if ConvTranspose need Padding 1
         self.l42To46 = nn.Sequential(nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'),
                                      nn.ConvTranspose2d(128, 64, kernel_size=(3,3), stride=2, padding=1, output_padding=1),
                                      nn.ConvTranspose2d(64, 64, kernel_size=(3,3), padding=1),
@@ -354,71 +351,6 @@ def evaluation_step(engine, batch):
     return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
 
 
-"""def train(model, epochs, lossFunction, learningRate, verbose = True, scheduler = None, optimizer = None):
-    if optimizer is None:
-        optimizer = torch.optim.AdamW(params = model.parameters(), lr = learningRate)
-    losses = []
-    for epoch in range(epochs):
-        model.train()
-        aggregatedLoss = 0
-        stepsPerPrint = 5
-        epochsPerValidation = 1
-        for batch, data in enumerate(trainLoader):
-            img = data[:, 0]
-            label = data[:, 1].to(torch.int64)
-            img = img.to(device)
-            label2DOHE = label2DOHE.to(device)
-            output = model(img).squeeze(1)
-            loss = lossFunction(output, label2DOHE)
-            aggregatedLoss += loss.item()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            if batch % stepsPerPrint == 0 and not batch == 0:
-                if verbose:
-                    print(f"Epoch: {epoch}, Batch: {batch // TRAIN_BATCH_SIZE}, Loss: {aggregatedLoss / (stepsPerPrint)}")
-                aggregatedLoss = 0
-        if epoch % epochsPerValidation == 0:
-            model.eval()
-            with torch.inference_mode():
-                valAggregatedLoss = 0
-                valAggregatedMeanIoU = 0
-                steps = 0
-                iouSteps = 0
-                for batch, data in enumerate(valLoader):
-                    img = data[:, 0]
-                    label = data[:, 1].to(torch.int64)
-                    label2D = label.reshape(3, -1).transpose(0,1)
-                    indexMap = torch.zeros(label2D.shape[0])
-                    for color, index in colorDict.items():
-                        indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
-                    label2DOHE = nn.functional.one_hot(indexMap.to(torch.int64), num_classes=len(colorDict.keys())).transpose(0, 1).reshape(VAL_BATCH_SIZE, len(colorDict.keys()), targetHeight, targetWidth).to(torch.float16)
-                    img = img.to(device)
-                    label2DOHE = label2DOHE.to(device)
-                    output = model(img).squeeze(1)
-                    loss = lossFunction(output, label2DOHE)
-                    valAggregatedLoss += loss.item()
-                    for color, index in colorDict.items():
-                        groundTruthMap = torch.all(label2D == color, dim=1).to(device)
-                        predClassMap = torch.argmax(output, dim = 1).reshape(1, -1) == index
-                        sumMap = groundTruthMap.to(torch.int) + predClassMap.to(torch.int)
-                        andMap = predClassMap & groundTruthMap
-                        truePositive = torch.sum(andMap)
-                        falsePositive = torch.sum(sumMap - groundTruthMap.to(torch.int))
-                        falseNegative = torch.sum(sumMap - predClassMap.to(torch.int))
-                        if truePositive:
-                            valAggregatedMeanIoU += truePositive / (truePositive + falsePositive + falseNegative)
-                            iouSteps += 1
-                    steps += 1
-                print(f"Average Dev Loss: {valAggregatedLoss / steps}")
-                print(f"Average IoU Loss: {valAggregatedMeanIoU / iouSteps}")
-    return losses
-    train(model, EPOCHS, lossFunction, LEARNING_RATE, optimizer = optimizer)
-
-# 5. Evaluation Metrics
-"""
-
-
 class ExpectedCalibrationError(Metric):
     def __init__(self, ignoredClass, numBins: torch.Tensor, outputTransform=lambda x: x, device="cpu"):
         self.ignoredClass = ignoredClass
@@ -459,7 +391,6 @@ class ExpectedCalibrationError(Metric):
         if torch.sum(self._num_examples) == 0:
             raise NotComputableError(
                 "ExpectedCalibrationError must have at least one example per bin before it can be computed")
-        # Possibly set Error to 0 if no items in bin, and just require at least one sample
         ECE = 0
         for bin in range(self.numBins):
             if self._num_examples[bin] == 0:
@@ -527,7 +458,7 @@ class StaticCalibrationError(Metric):
                     (self._num_correct[bin, classIndex] / self._num_examples[bin, classIndex]) - (
                                 self._accumulated_confidence[bin, classIndex] / self._num_examples[bin, classIndex]))
 
-        if self.ignoredClass != -1:
+        if self.ignoredClass is not None and isinstance(self.ignoredClass, int) and 0 <= self.ignoredClass < self.numClasses:
             SCE = (1 / (self.numClasses - 1)) * SCE
         else:
             SCE = (1 / self.numClasses) * SCE
@@ -661,6 +592,5 @@ def evaluator_on_epoch_completed(engine):
 
 trainer.run(trainLoader, max_epochs=1)
 # model.load_state_dict(torch.load('DeepResidual_CalibrationTest', weights_only=True))
-"""{'miou': 0.06197101828009659, 'ECE': 0.41888636350631714}"""
 
 
