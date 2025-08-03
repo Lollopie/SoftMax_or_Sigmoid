@@ -505,7 +505,7 @@ class StaticCalibrationError(Metric):
             correct = torch.eq(indices, classIndex).reshape(-1)
             for bin in range(self.numBins):
                 mask = torch.logical_and((bin / self.numBins) < y_pred[classIndex, :],
-                                         y_pred[classIndex, :] < ((bin + 1) / self.numBins))
+                                         y_pred[classIndex, :] <= ((bin + 1) / self.numBins))
                 self._num_correct[bin, classIndex] += torch.sum(correct[mask]).to(self._device)
                 self._num_examples[bin, classIndex] += torch.sum(mask).to(self._device)
                 self._accumulated_confidence[bin, classIndex] += torch.sum(y_pred[classIndex, :][mask]).to(self._device)
