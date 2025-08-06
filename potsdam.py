@@ -317,7 +317,7 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+model = DeepResidualUNet(inputChannels, 64, len(colorDict.keys()))
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -369,16 +369,16 @@ class ExpectedCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
-        y_pred, y = output[0].detach(), output[1].detach()
+        y_pred, y = output[0].detach().reshape(-1, output[0].shape[1]), output[1].detach().reshape(-1, 1)
 
         confidences = torch.max(y_pred, dim=1)
-        indices = confidences.indices
+        indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
         y_filtered = y[mask]
         indices = indices[mask]
         correct = torch.eq(indices, y_filtered).reshape(-1)
-        confidences = confidences.values[mask].reshape(-1)
+        confidences = confidences.values.reshape(-1, 1)[mask].reshape(-1)
         for bin in range(self.numBins):
             mask = torch.logical_and((bin / self.numBins) < confidences, confidences <= ((bin + 1) / self.numBins))
 
@@ -420,26 +420,25 @@ class StaticCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
-        y_pred, y = output[0].detach(), output[1].detach()
+        y_pred, y = output[0].detach().reshape(-1, self.numClasses), output[1].detach().reshape(-1, 1)
 
-        indices = torch.argmax(y_pred, dim=1)
+        indices = torch.argmax(y_pred, dim=1).reshape(-1, 1)
 
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
         y = y[mask]
-        indices = indices[mask]
-        y_pred = y_pred[mask.repeat(self.numClasses, 1, 1).unsqueeze(0)].reshape(self.numClasses, -1)
+        y_pred = y_pred[mask.repeat(1, self.numClasses)].reshape(-1, self.numClasses)
 
         for classIndex in range(self.numClasses):
             if classIndex == self.ignoredClass:
                 continue
-            correct = torch.eq(indices, classIndex).reshape(-1)
+            correct = torch.eq(y, classIndex).reshape(-1)
             for bin in range(self.numBins):
-                mask = torch.logical_and((bin / self.numBins) < y_pred[classIndex, :],
-                                         y_pred[classIndex, :] <= ((bin + 1) / self.numBins))
+                mask = torch.logical_and((bin / self.numBins) < y_pred[:, classIndex],
+                                         y_pred[:, classIndex] <= ((bin + 1) / self.numBins))
                 self._num_correct[bin, classIndex] += torch.sum(correct[mask]).to(self._device)
                 self._num_examples[bin, classIndex] += torch.sum(mask).to(self._device)
-                self._accumulated_confidence[bin, classIndex] += torch.sum(y_pred[classIndex, :][mask]).to(self._device)
+                self._accumulated_confidence[bin, classIndex] += torch.sum(y_pred[:, classIndex][mask]).to(self._device)
 
     @sync_all_reduce("_num_examples:SUM", "_num_correct:SUM", "_accumulated_confidence:SUM")
     def compute(self):
@@ -454,7 +453,7 @@ class StaticCalibrationError(Metric):
             for bin in range(self.numBins):
                 if self._num_examples[bin, classIndex] == 0:
                     continue
-                SCE += (self._num_examples[bin, classIndex] / torch.sum(self._num_examples)) * torch.abs(
+                SCE += (self._num_examples[bin, classIndex] / torch.sum(self._num_examples[:, classIndex])) * torch.abs(
                     (self._num_correct[bin, classIndex] / self._num_examples[bin, classIndex]) - (
                                 self._accumulated_confidence[bin, classIndex] / self._num_examples[bin, classIndex]))
 
@@ -491,13 +490,10 @@ class AdaptiveExpectedCalibrationError(Metric):
             raise NotComputableError(
                 "AdaptiveExpectedCalibrationError must have at least one example before it can be computed")
         sortedData = self._data[:, 0].clone().sort().values
-        boundaries = torch.zeros(self.numBins)
-        for bin in range(self.numBins):
-            boundaries[bin] = sortedData[torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
-        indexTensor = torch.bucketize(sortedData, boundaries)
+        boundaries = torch.quantile(sortedData, torch.arange(self.numBins + 1) / self.numBins, interpolation='midpoint')
         AECE = 0
         for bin in range(self.numBins):
-            mask = indexTensor == bin
+            mask = torch.logical_and(boundaries[bin] <= self._data[:, 0], self._data[:, 0] <= boundaries[bin+1])
             AECE += torch.abs((torch.sum(self._data[:, 1][mask]) / torch.sum(mask)) - (
                         torch.sum(self._data[:, 0][mask]) / torch.sum(mask)))
         AECE *= 1 / self.numBins
@@ -532,13 +528,9 @@ class AdaptiveStaticCalibrationError(Metric):
         ASCE = 0
         for classIndex in range(self.numClasses):
             sortedData = self._data[:, classIndex].clone().sort().values
-            boundaries = torch.zeros(self.numBins)
+            boundaries = torch.quantile(sortedData, torch.arange(self.numBins + 1) / self.numBins, interpolation='midpoint')
             for bin in range(self.numBins):
-                boundaries[bin] = sortedData[
-                    torch.ceil(((bin + 1) / self.numBins) * sortedData.shape[0]).to(torch.int) - 1]
-            indexTensor = torch.bucketize(sortedData, boundaries)
-            for bin in range(self.numBins):
-                mask = indexTensor == bin
+                mask = torch.logical_and(boundaries[bin] <= self._data[:, classIndex], self._data[:, classIndex] <= boundaries[bin+1])
                 ASCE += torch.abs((torch.sum(self._data[:, -1][mask]) / torch.sum(mask)) - (
                             torch.sum(self._data[:, classIndex][mask]) / torch.sum(mask)))
         ASCE *= 1 / (self.numClasses * self.numBins)
@@ -574,7 +566,7 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    evaluator.run(valLoader, max_epochs=1)
+    evaluator.run(valLoader, max_epochs=1, epoch_length=1)
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -590,7 +582,5 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-trainer.run(trainLoader, max_epochs=1)
+# trainer.run(trainLoader, max_epochs=1, epoch_length=1)
 # model.load_state_dict(torch.load('DeepResidual_CalibrationTest', weights_only=True))
-
-
