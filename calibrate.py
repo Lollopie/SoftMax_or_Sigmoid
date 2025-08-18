@@ -4,22 +4,23 @@ from ignite.engine import Engine, Events
 from ignite.exceptions import NotComputableError
 class ExpectedCalibrationErrorLoss(nn.Module):
     def __init__(self, indexToIgnore, numBins, device):
+        super().__init__()
         self.indexToIgnore = indexToIgnore
         self.numBins = numBins
         self.device = device
         self._num_correct = torch.zeros(self.numBins).to(self.device)
         self._num_examples = torch.zeros(self.numBins).to(self.device)
         self._accumulated_confidence = torch.zeros(self.numBins).to(self.device)
-        super().__init__()
     def forward(self, y_pred, y):
+        y_pred, y = y_pred.reshape(-1, y_pred.shape[1]), y.reshape(-1, 1)
         confidences = torch.max(torch.softmax(y_pred, dim=1), dim=1)
-        indices = confidences.indices
+        indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
         y_filtered = y[mask]
         indices = indices[mask]
         correct = torch.eq(indices, y_filtered).reshape(-1)
-        confidences = confidences.values[mask].reshape(-1)
+        confidences = confidences.values.reshape(-1, 1)[mask].reshape(-1)
         for bin in range(self.numBins):
             mask = torch.logical_and((bin / self.numBins) < confidences, confidences <= ((bin + 1) / self.numBins))
             self._num_correct[bin] += torch.sum(correct[mask]).to(self.device)
@@ -29,7 +30,7 @@ class ExpectedCalibrationErrorLoss(nn.Module):
     def compute(self):
         if torch.sum(self._num_examples) == 0:
             raise NotComputableError(
-                "ExpectedCalibrationError must have at least one example per bin before it can be computed")
+                "ExpectedCalibrationError must have at least one example before it can be computed")
         # Possibly set Error to 0 if no items in bin, and just require at least one sample
         ECE = torch.tensor(0.0).to(self.device)
         for bin in range(self.numBins):
@@ -64,7 +65,7 @@ def calibrationStep(engine, batch):
     y_pred = y_pred / temperature
     expectedCalibrationErrorLoss(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
-def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learningRate=5e-3, epochs=1):
+def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learningRate=10e-1, epochs=1):
     global optimizer
     global temperature
     global expectedCalibrationErrorLoss
@@ -82,7 +83,7 @@ def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learn
         global temperature
         loss = expectedCalibrationErrorLoss.compute()
         loss.backward()
-        # localOptimizer.step()
+        localOptimizer.step()
         localOptimizer.zero_grad()
         print(f'Calibration: ECE = {loss.item()}, {temperature}')
     model.requires_grad_(False)

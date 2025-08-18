@@ -98,7 +98,7 @@ TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 LEARNING_RATE = 1e-04
-EPOCHS = 10
+EPOCHS = 50
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 trainLoader = DataLoader(trainDataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
@@ -310,8 +310,8 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = UNet(inputChannels, len(colorDict.keys()))
-model.load_state_dict(torch.load('./UNet_50', weights_only=True))
+model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+# model.load_state_dict(torch.load('./AtrousDenseUDeconvNet_235_50', weights_only=True))
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -332,7 +332,6 @@ def train_step(engine, batch):
     loss.backward()
     optimizer.step()
     return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
-
 
 def evaluation_step(engine, batch):
     img = batch['img']
@@ -365,7 +364,7 @@ class ExpectedCalibrationError(Metric):
     def update(self, output):
         y_pred, y = output[0].detach().reshape(-1, output[0].shape[1]), output[1].detach().reshape(-1, 1)
 
-        confidences = torch.max(y_pred, dim=1)
+        confidences = torch.max(torch.softmax(y_pred, dim=1), dim=1)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
@@ -384,7 +383,7 @@ class ExpectedCalibrationError(Metric):
     def compute(self):
         if torch.sum(self._num_examples) == 0:
             raise NotComputableError(
-                "ExpectedCalibrationError must have at least one example per bin before it can be computed")
+                "ExpectedCalibrationError must have at least one example before it can be computed")
         ECE = 0
         for bin in range(self.numBins):
             if self._num_examples[bin] == 0:
@@ -560,7 +559,11 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    evaluator.run(valLoader, max_epochs=1, epoch_length=1)
+    torch.save(model.state_dict(), Path('./') / (model.__class__.__name__ + '_258_' + str(epoch)))
+    model.eval()
+    with torch.no_grad():
+        evaluator.run(valLoader, max_epochs=1)
+    model.train()
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -576,5 +579,8 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-# trainer.run(trainLoader, max_epochs=1, epoch_length=1)
+trainer.run(trainLoader, max_epochs=EPOCHS)
 # model.load_state_dict(torch.load('DeepResidual_CalibrationTest', weights_only=True))
+# evaluator.run(valLoader, max_epochs=1)
+# from calibrate import calibrate
+# calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)
