@@ -77,6 +77,7 @@ def loadDataset(basePath: Path):
 
 trainDataset = loadDataset(Path('./trainImages'))
 valDataset = loadDataset(Path('./validationImages'))
+testDataset = loadDataset(Path('./testImages'))
 inputChannels = trainDataset[0]['img'].shape[0]
 
 class ImageDataset(Dataset):
@@ -93,17 +94,18 @@ class ImageDataset(Dataset):
 
 trainDataset = ImageDataset(trainDataset)
 valDataset = ImageDataset(valDataset)
+testDataset = ImageDataset(testDataset)
 
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 LEARNING_RATE = 1e-04
-EPOCHS = 50
+EPOCHS = 60
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 trainLoader = DataLoader(trainDataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
 valLoader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
-
+testLoader = DataLoader(testDataset, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
 """# 3. Model Setup"""
 class UNetEncoding(nn.Sequential):
     def __init__(self, channels):
@@ -244,21 +246,21 @@ class DeepResidualUNet(nn.Module):
         x = self.output(x)
         return x
 class AtrousDenseUDeconvNet(nn.Module):
-    def __init__(self, inChannels, outChannels, dropoutChance=0.5):
+    def __init__(self, inChannels, outChannels, dropoutChance=0.1):
         super().__init__()
         #TODO: test padding modes
         self.l2 = nn.BatchNorm2d(inChannels)
-        self.l3 = nn.Sequential(nn.Conv2d(inChannels, 16, kernel_size=(3, 3), padding='same'), nn.ReLU())
+        self.l3 = nn.Sequential(nn.Conv2d(inChannels, 16, kernel_size=(3,3), padding='same'), nn.ReLU())
         self.l4 = nn.Sequential(nn.Conv2d(16, 8, kernel_size=(3,3), padding='same', dilation=2), nn.ReLU())
-        self.l5 = nn.Sequential(nn.Conv2d(8, 16, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
-        self.l6 = nn.Sequential(nn.Conv2d(16, 32, kernel_size=(3,3), padding='same', dilation=8), nn.ReLU())
+        self.l5 = nn.Sequential(nn.Conv2d(8, 16, kernel_size=(3,3), padding='same', dilation=3), nn.ReLU())
+        self.l6 = nn.Sequential(nn.Conv2d(16, 32, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
         self.l8To11 = nn.Sequential(nn.Conv2d(72, 64, kernel_size=(3,3), padding='same'), nn.ReLU(),
                                     nn.Dropout(dropoutChance),
-                                    nn.AvgPool2d(kernel_size=(2, 2)),
+                                    nn.AvgPool2d(kernel_size=(2,2)),
                                     nn.BatchNorm2d(64))
-        self.l12 = nn.Sequential(nn.Conv2d(64, 32, kernel_size=(3, 3), padding='same', dilation=2), nn.ReLU())
-        self.l13 = nn.Sequential(nn.Conv2d(32, 64, kernel_size=(3, 3), padding='same', dilation=5), nn.ReLU())
-        self.l14 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=(3, 3), padding='same', dilation=8), nn.ReLU())
+        self.l12 = nn.Sequential(nn.Conv2d(64, 32, kernel_size=(3,3), padding='same', dilation=2), nn.ReLU())
+        self.l13 = nn.Sequential(nn.Conv2d(32, 64, kernel_size=(3,3), padding='same', dilation=3), nn.ReLU())
+        self.l14 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
         self.l16To21 = nn.Sequential(nn.Conv2d(288, 256, kernel_size=(3,3), padding='same'), nn.ReLU(),
                                  nn.Dropout(dropoutChance),
                                  nn.AvgPool2d(kernel_size=(2,2)),
@@ -311,7 +313,10 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = self.l42To46(x)
         return x
 model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
-# model.load_state_dict(torch.load('./AtrousDenseUDeconvNet_235_50', weights_only=True))
+startEpoch = 0
+baseName = 'AtrousDenseUDeconvNet_258_2d_'
+if startEpoch != 0:
+    model.load_state_dict(torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True))
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -559,11 +564,9 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    torch.save(model.state_dict(), Path('./') / (model.__class__.__name__ + '_258_' + str(epoch)))
-    model.eval()
+    torch.save(model.state_dict(), Path('./') / (baseName + str(epoch + startEpoch)))
     with torch.no_grad():
         evaluator.run(valLoader, max_epochs=1)
-    model.train()
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -579,8 +582,7 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-trainer.run(trainLoader, max_epochs=EPOCHS)
-# model.load_state_dict(torch.load('DeepResidual_CalibrationTest', weights_only=True))
-# evaluator.run(valLoader, max_epochs=1)
+trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
+# evaluator.run(testLoader, max_epochs=1)
 # from calibrate import calibrate
 # calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)
