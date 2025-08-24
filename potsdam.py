@@ -100,12 +100,12 @@ TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 LEARNING_RATE = 1e-04
-EPOCHS = 60
+EPOCHS = 50
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 trainLoader = DataLoader(trainDataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
-valLoader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
-testLoader = DataLoader(testDataset, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
+valLoader = DataLoader(valDataset, batch_size=VAL_BATCH_SIZE, shuffle=False, num_workers=0, drop_last=True)
+testLoader = DataLoader(testDataset, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=0, drop_last=True)
 """# 3. Model Setup"""
 class UNetEncoding(nn.Sequential):
     def __init__(self, channels):
@@ -252,30 +252,30 @@ class AtrousDenseUDeconvNet(nn.Module):
         self.l2 = nn.BatchNorm2d(inChannels)
         self.l3 = nn.Sequential(nn.Conv2d(inChannels, 16, kernel_size=(3,3), padding='same'), nn.ReLU())
         self.l4 = nn.Sequential(nn.Conv2d(16, 8, kernel_size=(3,3), padding='same', dilation=2), nn.ReLU())
-        self.l5 = nn.Sequential(nn.Conv2d(8, 16, kernel_size=(3,3), padding='same', dilation=3), nn.ReLU())
-        self.l6 = nn.Sequential(nn.Conv2d(16, 32, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
+        self.l5 = nn.Sequential(nn.Conv2d(8, 16, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
+        self.l6 = nn.Sequential(nn.Conv2d(16, 32, kernel_size=(3,3), padding='same', dilation=8), nn.ReLU())
         self.l8To11 = nn.Sequential(nn.Conv2d(72, 64, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                    nn.Dropout(dropoutChance),
+                                    nn.Dropout2d(dropoutChance),
                                     nn.AvgPool2d(kernel_size=(2,2)),
-                                    nn.BatchNorm2d(64))
+                                    nn.BatchNorm2d(64, track_running_stats=False))
         self.l12 = nn.Sequential(nn.Conv2d(64, 32, kernel_size=(3,3), padding='same', dilation=2), nn.ReLU())
-        self.l13 = nn.Sequential(nn.Conv2d(32, 64, kernel_size=(3,3), padding='same', dilation=3), nn.ReLU())
-        self.l14 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
+        self.l13 = nn.Sequential(nn.Conv2d(32, 64, kernel_size=(3,3), padding='same', dilation=5), nn.ReLU())
+        self.l14 = nn.Sequential(nn.Conv2d(64, 128, kernel_size=(3,3), padding='same', dilation=8), nn.ReLU())
         self.l16To21 = nn.Sequential(nn.Conv2d(288, 256, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                 nn.Dropout(dropoutChance),
+                                 nn.Dropout2d(dropoutChance),
                                  nn.AvgPool2d(kernel_size=(2,2)),
-                                 nn.BatchNorm2d(256),
+                                 nn.BatchNorm2d(256, track_running_stats=False),
                                  nn.Conv2d(256, 128, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                 nn.Dropout(dropoutChance))
+                                 nn.Dropout2d(dropoutChance))
         self.l22To24 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
                                  nn.Conv2d(128, 256, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                 nn.Dropout(dropoutChance))
+                                 nn.Dropout2d(dropoutChance))
         self.l25To27 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
                                  nn.Conv2d(256, 512, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                 nn.Dropout(dropoutChance))
+                                 nn.Dropout2d(dropoutChance))
         self.l28To32 = nn.Sequential(nn.MaxPool2d(kernel_size=(2,2)),
                                  nn.Conv2d(512, 1024, kernel_size=(3,3), padding='same'), nn.ReLU(),
-                                 nn.Dropout(dropoutChance),
+                                 nn.Dropout2d(dropoutChance),
                                  nn.Upsample(scale_factor=2.0, mode='bilinear'),
                                  nn.Conv2d(1024, 512, kernel_size=(3,3), padding='same'), nn.ReLU())
         self.l34To36 = nn.Sequential(nn.Conv2d(1024, 512, kernel_size=(3,3), padding='same'), nn.ReLU(),
@@ -313,10 +313,14 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = self.l42To46(x)
         return x
 model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
-startEpoch = 0
+startEpoch = 50
 baseName = 'AtrousDenseUDeconvNet_258_2d_'
 if startEpoch != 0:
-    model.load_state_dict(torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True))
+    stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
+    removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
+    for key in removedKeys:
+        del stateDict[key]
+    model.load_state_dict(stateDict)
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -367,9 +371,9 @@ class ExpectedCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
-        y_pred, y = output[0].detach().reshape(-1, output[0].shape[1]), output[1].detach().reshape(-1, 1)
+        y_pred, y = output[0].detach().reshape(output[0].shape[1], -1), output[1].detach().reshape(-1, 1)
 
-        confidences = torch.max(torch.softmax(y_pred, dim=1), dim=1)
+        confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
@@ -418,9 +422,9 @@ class StaticCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
-        y_pred, y = output[0].detach().reshape(-1, self.numClasses), output[1].detach().reshape(-1, 1)
+        y_pred, y = output[0].detach().reshape(self.numClasses, -1), output[1].detach().reshape(-1, 1)
 
-        indices = torch.argmax(y_pred, dim=1).reshape(-1, 1)
+        indices = torch.argmax(y_pred, dim=0).reshape(-1, 1)
 
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
@@ -475,6 +479,7 @@ class AdaptiveExpectedCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
+        #TODO: Check if y_pred shape is correct and torch max dim is correct
         y_pred, y = output[0].detach(), output[1].detach()
 
         confidences = torch.max(y_pred, dim=1)
@@ -512,6 +517,7 @@ class AdaptiveStaticCalibrationError(Metric):
 
     @reinit__is_reduced
     def update(self, output):
+        # TODO: Check if y_pred shape is correct and torch argmax dim is correct
         y_pred, y = output[0].detach(), output[1].detach()
 
         indices = torch.argmax(y_pred, dim=1)
@@ -542,8 +548,8 @@ def output_transform(output):
 
 
 NUM_BINS = torch.tensor(5)
-evaluator = Engine(evaluation_step)
 trainer = Engine(train_step)
+evaluator = Engine(evaluation_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
 metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
@@ -565,6 +571,7 @@ def trainer_on_epoch_completed(engine):
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
     torch.save(model.state_dict(), Path('./') / (baseName + str(epoch + startEpoch)))
+    model.eval()
     with torch.no_grad():
         evaluator.run(valLoader, max_epochs=1)
 
@@ -582,7 +589,8 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
-# evaluator.run(testLoader, max_epochs=1)
+# trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
+model.eval()
+evaluator.run(testLoader, max_epochs=1)
 # from calibrate import calibrate
 # calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)

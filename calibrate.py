@@ -12,8 +12,8 @@ class ExpectedCalibrationErrorLoss(nn.Module):
         self._num_examples = torch.zeros(self.numBins).to(self.device)
         self._accumulated_confidence = torch.zeros(self.numBins).to(self.device)
     def forward(self, y_pred, y):
-        y_pred, y = y_pred.reshape(-1, y_pred.shape[1]), y.reshape(-1, 1)
-        confidences = torch.max(torch.softmax(y_pred, dim=1), dim=1)
+        y_pred, y = y_pred.reshape(y_pred.shape[1], -1), y.reshape(-1, 1)
+        confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
@@ -65,7 +65,7 @@ def calibrationStep(engine, batch):
     y_pred = y_pred / temperature
     expectedCalibrationErrorLoss(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
-def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learningRate=10e-1, epochs=1):
+def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learningRate=5e-1, epochs=1):
     global optimizer
     global temperature
     global expectedCalibrationErrorLoss
@@ -74,8 +74,9 @@ def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, device, learn
     globalDevice = device
     globalModel = model
     expectedCalibrationErrorLoss = ExpectedCalibrationErrorLoss(indexToIgnore, numBins, device)
-    model.eval()
-    temperature = torch.tensor(1.0, requires_grad=True)
+    # model.eval()
+    #Calibration: ECE = 0.045048683881759644, 1.493001937866211
+    temperature = torch.tensor(1.722, requires_grad=True)
     localOptimizer = torch.optim.SGD([temperature], lr=learningRate)
     engine = Engine(calibrationStep)
     @engine.on(Events.EPOCH_COMPLETED)
