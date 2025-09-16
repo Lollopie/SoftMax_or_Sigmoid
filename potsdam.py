@@ -312,20 +312,21 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+model = DeepResidualUNet(inputChannels, len(colorDict.keys()))
 startEpoch = 50
-baseName = 'AtrousDenseUDeconvNet_258_2d_'
+baseName = 'DeepResidualUNet_Sigmoid_'
 if startEpoch != 0:
     stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
     for key in removedKeys:
-        del stateDict[key]
+        if key in stateDict:
+            del stateDict[key]
     model.load_state_dict(stateDict)
 model = model.to(device)
 
 """# 4. Model Training"""
 
-lossFunction = nn.CrossEntropyLoss()
+lossFunction = nn.BCEWithLogitsLoss()
 optimizer = torch.optim.AdamW(params=model.parameters(), lr=LEARNING_RATE)
 
 
