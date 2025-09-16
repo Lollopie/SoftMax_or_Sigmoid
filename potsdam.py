@@ -1,4 +1,5 @@
 from ignite.engine import Engine
+from ignite.handlers import ProgressBar, Checkpoint
 from ignite.metrics import ConfusionMatrix
 from ignite.metrics import mIoU
 from ignite.metrics import Metric
@@ -314,7 +315,19 @@ class AtrousDenseUDeconvNet(nn.Module):
         return x
 model = DeepResidualUNet(inputChannels, len(colorDict.keys()))
 startEpoch = 50
-baseName = 'DeepResidualUNet_Sigmoid_'
+baseName = 'DeepResidualUNet_Sigmoid'
+to_save = {'model': model}
+checkpoint_dir = Path(f"./checkpoints/{baseName}/")
+
+checkpoint = Checkpoint(
+    to_save,
+    checkpoint_dir,
+    n_saved=5,
+    filename_prefix=baseName,
+    score_name='miou',
+    greater_or_equal=True
+)
+
 if startEpoch != 0:
     stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
@@ -571,10 +584,10 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    torch.save(model.state_dict(), Path('./') / (baseName + str(epoch + startEpoch)))
     model.eval()
     with torch.no_grad():
         evaluator.run(valLoader, max_epochs=1)
+
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -590,6 +603,9 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
+# evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
+
+#ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
 model.eval()
 evaluator.run(testLoader, max_epochs=1)
