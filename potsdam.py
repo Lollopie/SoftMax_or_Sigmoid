@@ -314,19 +314,19 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = self.l42To46(x)
         return x
 model = DeepResidualUNet(inputChannels, len(colorDict.keys()))
-startEpoch = 50
-baseName = 'DeepResidualUNet_Sigmoid'
+startEpoch = 40
+baseName = 'DeepResidual_1_'
 to_save = {'model': model}
-checkpoint_dir = Path(f"./checkpoints/{baseName}/")
-
-checkpoint = Checkpoint(
-    to_save,
-    checkpoint_dir,
-    n_saved=5,
-    filename_prefix=baseName,
-    score_name='miou',
-    greater_or_equal=True
-)
+# checkpoint_dir = Path(f"./checkpoints/{baseName}/")
+#
+# checkpoint = Checkpoint(
+#     to_save,
+#     checkpoint_dir,
+#     n_saved=5,
+#     filename_prefix=baseName,
+#     score_name='miou',
+#     greater_or_equal=True
+# )
 
 if startEpoch != 0:
     stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
@@ -561,7 +561,7 @@ def output_transform(output):
     return y_pred, y
 
 
-NUM_BINS = torch.tensor(5)
+NUM_BINS = torch.tensor(10)
 trainer = Engine(train_step)
 evaluator = Engine(evaluation_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
@@ -603,11 +603,16 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-# evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
 
-#ProgressBar().attach(trainer)
+# evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
+# ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
-model.eval()
-evaluator.run(testLoader, max_epochs=1)
+
+# model.eval()
+# evaluator.run(testLoader, max_epochs=1)
+
 # from calibrate import calibrate
 # calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)
+
+from plot import plot
+plot(model, testLoader, indexToIgnore, NUM_BINS, 6, baseName, device, temperature=2.09)
