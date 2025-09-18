@@ -561,7 +561,7 @@ def output_transform(output):
     return y_pred, y
 
 
-NUM_BINS = torch.tensor(10)
+NUM_BINS = torch.tensor(5)
 trainer = Engine(train_step)
 evaluator = Engine(evaluation_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
