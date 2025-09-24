@@ -313,9 +313,9 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = DeepResidualUNet(inputChannels, len(colorDict.keys()))
-startEpoch = 40
-baseName = 'DeepResidual_1_'
+model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+startEpoch = 50
+baseName = 'AtrousDenseUDeconvNet_258_2d_Sigmoid_'
 to_save = {'model': model}
 # checkpoint_dir = Path(f"./checkpoints/{baseName}/")
 #
@@ -387,7 +387,7 @@ class ExpectedCalibrationError(Metric):
     def update(self, output):
         y_pred, y = output[0].detach().reshape(output[0].shape[1], -1), output[1].detach().reshape(-1, 1)
 
-        confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
@@ -608,11 +608,12 @@ def evaluator_on_epoch_completed(engine):
 # ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
 
-# model.eval()
-# evaluator.run(testLoader, max_epochs=1)
-
-# from calibrate import calibrate
-# calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)
+model.eval()
+# evaluator.run(valLoader, max_epochs=1)
+#
+from calibrate import calibrate
+temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, 6, device, epochs=100)
+temperature.requires_grad_(False)
 
 from plot import plot
-plot(model, testLoader, indexToIgnore, NUM_BINS, 6, baseName, device, temperature=2.09)
+plot(model, testLoader, indexToIgnore, NUM_BINS, 6, baseName, device, temperature=temperature)

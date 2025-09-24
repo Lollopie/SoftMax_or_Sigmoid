@@ -20,7 +20,7 @@ class AccuracyUncertaintyPlot(nn.Module):
     def forward(self, y_pred, y):
         y_pred, y = y_pred.reshape(self.numClasses, -1), y.reshape(-1, 1)
 
-        confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
@@ -72,7 +72,7 @@ def plotStep(engine, batch):
     img = img.to(globalDevice)
     label = label.to(globalDevice).to(torch.int64)
     y_pred = globalModel(img).squeeze(1)
-    y_pred = y_pred / globalTemperature
+    y_pred = y_pred / globalTemperature.unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
     accuracyUncertaintyPlot(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
 
@@ -83,7 +83,7 @@ def plot(model: nn.Module, testLoader, indexToIgnore, numBins, numClasses, namin
     global globalModel
     globalDevice = device
     globalModel = model
-    accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, namingScheme, device)
+    accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, namingScheme + str(temperature).replace('.',',') + '_', device)
     globalTemperature = temperature
     engine = Engine(plotStep)
     model.requires_grad_(False)
