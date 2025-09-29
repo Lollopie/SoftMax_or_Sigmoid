@@ -45,7 +45,7 @@ class ExpectedCalibrationErrorLoss(nn.Module):
 class StaticCalibrationErrorLoss(nn.Module):
     def __init__(self, indexToIgnore, numBins, numClasses, device):
         super().__init__()
-        self.indexToIgnore = indexToIgnore
+        self.indexToIgnore = indexToIgnore if indexToIgnore is not None else -1
         self.numBins = numBins
         self.device = device
         self.numClasses = numClasses
@@ -59,7 +59,7 @@ class StaticCalibrationErrorLoss(nn.Module):
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
         y_filtered = y[mask]
-        confidences = confidences[mask.repeat(1, self.numClasses)].reshape(-1, self.numClasses)
+        confidences = confidences[mask.repeat(1, self.numClasses).T].reshape(-1, self.numClasses)
         for classIndex in range(self.numClasses):
             if classIndex == self.indexToIgnore:
                 continue
@@ -105,19 +105,18 @@ class AdaptiveExpectedCalibrationErrorLoss(nn.Module):
         self._data = torch.cat((torch.stack((confidences, correct), dim=1), self._data), dim=0)
 
     def compute(self):
-        if torch.sum(self._num_examples) == 0:
+        if self._data.shape[0] == 0:
             raise NotComputableError(
                 "AdaptiveExpectedCalibrationErrorLoss must have at least one example before it can be computed")
-        sortedData = self._data[:, 0].clone().sort().values
-        boundaries = torch.quantile(sortedData, torch.arange(self.numBins + 1) / self.numBins, interpolation='midpoint')
+        sortedData = self._data[self._data[:, 0].argsort()]
+        boundaries = torch.floor((torch.ones(self.numBins + 1, device=self.device) * sortedData.shape[0]) * (torch.arange(self.numBins + 1, device=self.device) / self.numBins))
         AECE = torch.tensor(0.0, device=self.device)
         for bin in range(self.numBins):
-            mask = torch.logical_and(boundaries[bin] < self._data[:, 0], self._data[:, 0] <= boundaries[bin+1])
-            if torch.sum(mask) == 0:
-                continue
-            AECE += (torch.sum(mask) / self._data.shape[0]) * torch.abs(
-                (torch.sum(self._data[:, 1][mask]) / torch.sum(mask)) -
-                (torch.sum(self._data[:, 0][mask]) / torch.sum(mask)))
+            lowerBound = boundaries[bin].to(torch.int)
+            upperBound = boundaries[bin + 1].to(torch.int)
+            AECE += ((upperBound - lowerBound) / self._data.shape[0]) * torch.abs(
+                (torch.sum(sortedData[lowerBound:upperBound, 1]) / (upperBound - lowerBound)) -
+                (torch.sum(sortedData[lowerBound:upperBound, 0]) / (upperBound - lowerBound)))
         self._data = torch.empty((0, 2), device=self.device)
         return AECE
 class AdaptiveStaticCalibrationErrorLoss(nn.Module):
@@ -132,20 +131,23 @@ class AdaptiveStaticCalibrationErrorLoss(nn.Module):
         confidences = torch.sigmoid(y_pred).to(self.device)
         indices = torch.argmax(confidences, dim=0).reshape(-1, 1)
         correct = torch.eq(indices, y).reshape(-1, 1).to(self.device)
-        self._data = torch.cat((torch.cat((y_pred, correct), dim=1), self._data), dim=0)
+        self._data = torch.cat((torch.cat((y_pred.T, correct), dim=1), self._data), dim=0)
 
     def compute(self):
-        if torch.sum(self._num_examples) == 0:
+        if self._data.shape[0] == 0:
             raise NotComputableError(
                 "AdaptiveStaticCalibrationErrorLoss must have at least one example before it can be computed")
         ASCE = torch.tensor(0.0, device=self.device)
         for classIndex in range(self.numClasses):
-            sortedData = self._data[:, classIndex].clone().sort().values
-            boundaries = torch.quantile(sortedData, torch.arange(self.numBins + 1) / self.numBins, interpolation='midpoint')
+            sortedConfidences = self._data[:, classIndex].sort().values
+            sortedCorrectness = self._data[self._data[:, classIndex].argsort()][:, -1]
+            boundaries = torch.floor((torch.ones(self.numBins + 1, device=self.device) * sortedConfidences.shape[0]) * (torch.arange(self.numBins + 1, device=self.device) / self.numBins))
             for bin in range(self.numBins):
-                mask = torch.logical_and(boundaries[bin] < self._data[:, classIndex], self._data[:, classIndex] <= boundaries[bin+1])
-                ASCE += ((torch.sum(mask) / sortedData.shape[0]) *
-                         torch.abs((torch.sum(self._data[:, -1][mask]) / torch.sum(mask)) -
-                                   torch.sum(self._data[:, classIndex][mask]) / torch.sum(mask)))
+                lowerBound = boundaries[bin].to(torch.int)
+                upperBound = boundaries[bin + 1].to(torch.int)
+                ASCE += (((upperBound - lowerBound) / sortedConfidences.shape[0]) *
+                         torch.square((torch.sum(sortedCorrectness[lowerBound:upperBound]) / (upperBound - lowerBound)) -
+                                   torch.sum(sortedConfidences[lowerBound:upperBound]) / (upperBound - lowerBound)))
         self._data = torch.empty((0, self.numClasses + 1), device=self.device)
+        ASCE *= 1 / (self.numBins * self.numClasses)
         return ASCE

@@ -58,7 +58,6 @@ def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]
 transformInputImage = v2.Compose(
     [
         v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
 
@@ -313,9 +312,9 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+model = UNet(inputChannels, len(colorDict.keys()))
 startEpoch = 50
-baseName = 'AtrousDenseUDeconvNet_258_2d_Sigmoid_'
+baseName = 'UNet_Sigmoid_'
 to_save = {'model': model}
 # checkpoint_dir = Path(f"./checkpoints/{baseName}/")
 #
@@ -612,7 +611,8 @@ model.eval()
 # evaluator.run(valLoader, max_epochs=1)
 #
 from calibrate import calibrate
-temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, 6, device, epochs=100)
+from calibrationLoss import *
+temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, 6, AdaptiveStaticCalibrationErrorLoss(NUM_BINS, 6, device), device, epochs=100)
 temperature.requires_grad_(False)
 
 from plot import plot
