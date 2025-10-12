@@ -1,8 +1,11 @@
 import torch
+import torchvision.transforms
 from ignite.engine import Engine, Events
 from matplotlib import pyplot as plt
 import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from torch import nn
+from pathlib import Path
 class AccuracyUncertaintyPlot(nn.Module):
     def __init__(self, indexToIgnore, numBins, numClasses, namingScheme, device):
         #maybe add option for device
@@ -55,6 +58,7 @@ class AccuracyUncertaintyPlot(nn.Module):
         ax[1].bar(edges.numpy(), frequency, width=0.9 / self.numBins)
         ax[1].set_xlabel('confidence')
         ax[1].set_ylabel('number of samples')
+        ax[1].set_yscale('log')
         plt.savefig(self.namingScheme + str(self.iteration))
         self._num_correct = torch.zeros(self.numBins)
         self._num_examples = torch.zeros(self.numBins)
@@ -76,7 +80,7 @@ def plotStep(engine, batch):
     accuracyUncertaintyPlot(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
 
-def plot(model: nn.Module, testLoader, indexToIgnore, numBins, numClasses, namingScheme, device, epochs=1, temperature=1):
+def plotReliabilityDiagram(model: nn.Module, testLoader, indexToIgnore, numBins, numClasses, namingScheme, device, epochs=1, temperature=1):
     global globalTemperature
     global accuracyUncertaintyPlot
     global globalDevice
@@ -93,3 +97,53 @@ def plot(model: nn.Module, testLoader, indexToIgnore, numBins, numClasses, namin
     engine.run(testLoader, max_epochs=epochs)
     # Reset Previous State
     model.requires_grad_(True)
+
+def plotRandomImageClassOutput(model:nn.Module, testLoader, savePath: Path, device, colorDict):
+    #TODO: Maybe add temperature support
+    reverseColorDict = {value: key for key, value in colorDict.items()}
+    result = torch.zeros((3, 512, 512))
+    original = torch.zeros((3, 512, 512))
+    inputImage = torch.zeros((3, 512, 512))
+    for batch in testLoader:
+        image = batch['img'].to(device)
+        labelOHE = batch['label'][0]
+        label = batch['label'][1]
+        y_pred = model(image)
+        classMap = torch.argmax(y_pred, dim=1).squeeze(0)
+        label = label.squeeze(0)
+        for h in range(image.shape[2]):
+            for w in range(image.shape[3]):
+                result[:, h,w] = reverseColorDict[classMap[h, w].item()]
+                original[:, h,w] = reverseColorDict[label[h, w].item()]
+        inputImage = image
+        break
+    if not savePath.is_dir():
+        savePath.mkdir(parents=True, exist_ok=True)
+    torchvision.utils.save_image(inputImage, savePath / 'input.bmp')
+    torchvision.utils.save_image(result, savePath / 'result.bmp')
+    torchvision.utils.save_image(original, savePath / 'original.bmp')
+
+def uncertaintyFunctionInverse(inputTensor):
+    return 1 - inputTensor
+
+def plotUncertainty(model:nn.Module, testLoader, savePath, device, uncertaintyFunction = lambda x : 1 - x, softMax = True):
+    #TODO: Maybe add temperature support
+    for batch in testLoader:
+        image = batch['img'].to(device)
+        labelOHE = batch['label'][0]
+        label = batch['label'][1]
+        y_pred = model(image)
+        if softMax:
+            uncertaintyMap = torch.softmax(y_pred, dim=1)
+        else:
+            uncertaintyMap = torch.sigmoid(y_pred)
+        uncertaintyMap = torch.max(uncertaintyMap, dim=1).values
+        uncertaintyMap = uncertaintyFunction(uncertaintyMap)
+        fig, ax = plt.subplots()
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        im = ax.imshow(uncertaintyMap.squeeze(0).cpu().detach().numpy(), cmap='seismic', vmin=0, vmax=1)
+        fig.colorbar(im, cax=cax, orientation='vertical')
+        plt.show()
+        break
+

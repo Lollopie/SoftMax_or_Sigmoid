@@ -1,19 +1,22 @@
-import os
+import json
 
 from PIL import Image
 import torch
-import torch.utils.data
-from torch.utils.data import Dataset, DataLoader
-from torchvision import models, datasets, tv_tensors
 from torchvision.transforms import v2
-from torch import nn
 import numpy as np
 from pathlib import Path
-pathlist = Path('./2_Ortho_RGB/2_Ortho_RGB/').rglob('*.tif')
-labelPath = Path('./5_Labels_all/')
-trainPath = Path('./trainImages')
-testPath = Path('./testImages')
-valPath = Path('./validationImages')
+
+dataset = Path('./datasets/Potsdam')
+with open(dataset / 'dataset.json') as f:
+    datasetDetails = json.load(f)
+pathlist = (dataset / datasetDetails['InputDirectory']).rglob('*.tif')
+labelPath = dataset / datasetDetails['LabelDirectory']
+trainPath = dataset / 'train'
+testPath = dataset / 'test'
+valPath = dataset / 'val'
+for directory in [trainPath, testPath, valPath]:
+    (directory / 'Images').mkdir(parents=True, exist_ok=True)
+    (directory / 'Labels').mkdir(parents=True, exist_ok=True)
 paths = []
 for path in pathlist:
     path_in_str = path
@@ -21,9 +24,9 @@ for path in pathlist:
 trainNumber = np.ceil(len(paths) * 0.6)
 testNumber = np.ceil(len(paths) * 0.2)
 valNumber = len(paths) - trainNumber - testNumber
-N = 10
-targetHeight = 512
-targetWidth = 512
+N = datasetDetails['NumberOfImagesPerInputImage']
+targetHeight = datasetDetails['TargetImageSize']
+targetWidth = datasetDetails['TargetImageSize']
 toImageTransform = v2.Compose(
     [
         v2.ToImage(),
@@ -43,12 +46,12 @@ inputTransformation = v2.Compose(
 )
 for index, path in enumerate(paths):
     img = Image.open(path)
-    label = Image.open(labelPath / (path.stem[:-3] + 'label.tif'))
+    label = Image.open(labelPath / path.name)
     img = toImageTransform(img)
     label = toImageTransform(label)
     savePath = trainPath if index < trainNumber else (testPath if index < trainNumber + testNumber else valPath)
     for i in range(N):
         sampleImg, sampleLabel = datasetTransformation(img, label)
         sampleImg = inputTransformation(sampleImg)
-        v2.ToPILImage()(sampleImg).save(savePath / (path.stem[:-3] + str(i) + '_rgb.tif'))
-        v2.ToPILImage()(sampleLabel).save(savePath / (path.stem[:-3] + str(i) + '_label.tif'))
+        v2.ToPILImage()(sampleImg).save(savePath / 'Images' / (path.stem + '_' + str(i) + '.tif'))
+        v2.ToPILImage()(sampleLabel).save(savePath / 'Labels' / (path.stem + '_' + str(i) + '.tif'))

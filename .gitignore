@@ -1,6 +1,6 @@
-/validationImages/
-/testImages/
-/trainImages/
+/datasets/Potsdam/validationImages/
+/datasets/Potsdam/testImages/
+/datasets/Potsdam/trainImages/
 /2_Ortho_RGB/
 /2_Ortho_RGB.zip
 /5_Labels_all.zip
@@ -9,3 +9,10 @@
 /toyDataset/
 /*.tif
 /checkpoints
+/datasets/2025 Data Fusion/Label/
+/datasets/2025 Data Fusion/Input/
+/datasets/2025 Data Fusion/train/
+/datasets/2025 Data Fusion/val/
+/datasets/2025 Data Fusion/dfc25_track1_trainval.zip
+/datasets/Potsdam/Input/
+/datasets/Potsdam/Label/

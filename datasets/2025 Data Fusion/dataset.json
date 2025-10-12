@@ -1,0 +1,66 @@
+{
+  "name": "2025 Data Fusion",
+  "InputDirectory": "Input",
+  "LabelDirectory": "Label",
+  "ImageSize": 1024,
+  "TargetImageSize": 256,
+  "NumberOfImagesPerInputImage": 5,
+  "NumberOfLabelChannels": 1,
+  "NumberOfInputChannels": 1,
+  "LabelMapping": [
+    {
+      "R": 0,
+      "G": 0,
+      "B": 0,
+      "Name": "Unknown"
+    },
+    {
+      "R": 128,
+      "G": 0,
+      "B": 0,
+      "Name": "Bareland"
+    },
+    {
+      "R": 0,
+      "G": 255,
+      "B": 36,
+      "Name": "Rangeland"
+    },
+    {
+      "R": 148,
+      "G": 148,
+      "B": 148,
+      "Name": "Developed Space"
+    },
+    {
+      "R": 255,
+      "G": 255,
+      "B": 255,
+      "Name": "Road"
+    },
+    {
+      "R": 34,
+      "G": 97,
+      "B": 38,
+      "Name": "Tree"
+    },
+    {
+      "R": 0,
+      "G": 69,
+      "B": 255,
+      "Name": "Water"
+    },
+    {
+      "R": 75,
+      "G": 181,
+      "B": 73,
+      "Name": "Agriculture land"
+    },
+    {
+      "R": 222,
+      "G": 31,
+      "B": 7,
+      "Name": "Building"
+    }
+  ]
+}

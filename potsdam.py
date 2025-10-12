@@ -1,3 +1,6 @@
+import os
+
+import rasterio
 from ignite.engine import Engine
 from ignite.handlers import ProgressBar, Checkpoint
 from ignite.metrics import ConfusionMatrix
@@ -16,7 +19,7 @@ from torchvision.transforms import v2
 from torchvision import tv_tensors
 from torch import nn
 import numpy as np
-
+import json
 from pathlib import Path
 
 # p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
@@ -29,28 +32,29 @@ transformPILImageToTvTensorImage = v2.Compose(
     ]
 )
 
-colorDict = {torch.tensor([0, 0, 255]): 0,
-             torch.tensor([0, 255, 0]): 1,
-             torch.tensor([0, 255, 255]): 2,
-             torch.tensor([255, 0, 0]): 3,
-             torch.tensor([255, 255, 0]): 4,
-             torch.tensor([255, 255, 255]): 5,}
-indexToIgnore = None
-
 """#TODO: Properly set ignore index
 
 # 2. Dataset Setup
 """
-targetHeight = 512
-targetWidth = 512
+dataset = Path('./datasets/Potsdam')
+with open(dataset / 'dataset.json') as f:
+    datasetDetails = json.load(f)
+colorDict = {}
+for i, color in enumerate(datasetDetails['LabelMapping']):
+    colorDict[torch.tensor([color['R'], color['G'], color['B']])] = i
+indexToIgnore = None
+targetHeight = datasetDetails['TargetImageSize']
+targetWidth = datasetDetails['TargetImageSize']
 
-def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]):
+def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int], numberOfLabelChannels: int):
     label = label.to(torch.int64)
-    label2D = label.reshape(3, -1).transpose(0, 1)
-    indexMap = torch.zeros(label2D.shape[0])
-    for color, index in colorDictionary.items():
-        indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
-    indexMap = indexMap.to(torch.int64)
+    label2D = label.reshape(numberOfLabelChannels, -1).transpose(0, 1)
+    indexMap = label2D
+    if numberOfLabelChannels > 1:
+        indexMap = torch.zeros(label2D.shape[0])
+        for color, index in colorDictionary.items():
+            indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
+        indexMap = indexMap.to(torch.int64)
     labelOHE = nn.functional.one_hot(indexMap, num_classes=len(colorDictionary.keys())).transpose(0, 1).reshape(
         len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
     return labelOHE, indexMap.reshape(targetHeight, targetWidth)
@@ -61,40 +65,36 @@ transformInputImage = v2.Compose(
     ]
 )
 
+class EarthObservationImageryDataset(Dataset):
+    def __init__(self, listOfPaths, numberOfLabelChannels):
+        self.listOfPaths = listOfPaths
+        self.numberOfLabelChannels = numberOfLabelChannels
+
+    def __getitem__(self, idx):
+        img = Image.open(self.listOfPaths[idx])
+        labelSrc = rasterio.open(str(self.listOfPaths[idx]).replace('Images', 'Labels').replace('rgb', 'label'), mode='r')
+        label = labelSrc.read(list(range(1, self.numberOfLabelChannels+1))).astype(np.uint8)
+        imgTransformed = transformInputImage(transformPILImageToTvTensorImage(img))
+        labelTransformed = transformLabel(torch.tensor(label), colorDict, self.numberOfLabelChannels)
+        return {'img': imgTransformed, 'label': labelTransformed}
+
+    def __len__(self):
+        return len(self.listOfPaths)
 
 def loadDataset(basePath: Path):
     dataset = []
-    pathGenerator = basePath.rglob('*.tif')
+    pathGenerator = (basePath / 'Images').rglob('*.tif')
     for path in pathGenerator:
-        img = Image.open(basePath / path.name)
-        label = Image.open(basePath / path.name.replace('rgb', 'label'))
-        imgTransformed = transformInputImage(transformPILImageToTvTensorImage(img))
-        labelTransformed = transformLabel(transformPILImageToTvTensorImage(label), colorDict)
-        dataObject = {'img': imgTransformed, 'label': labelTransformed}
-        dataset.append(dataObject)
+        dataset.append(path)
     return dataset
 
-
-trainDataset = loadDataset(Path('./trainImages'))
-valDataset = loadDataset(Path('./validationImages'))
-testDataset = loadDataset(Path('./testImages'))
-inputChannels = trainDataset[0]['img'].shape[0]
-
-class ImageDataset(Dataset):
-    def __init__(self, dataset):
-        self.data = dataset
-        self.len = len(dataset)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-    def __len__(self):
-        return self.len
-
-
-trainDataset = ImageDataset(trainDataset)
-valDataset = ImageDataset(valDataset)
-testDataset = ImageDataset(testDataset)
+trainDataset = loadDataset(Path(dataset / 'train_old'))
+valDataset = loadDataset(Path(dataset / 'val_old'))
+testDataset = loadDataset(Path(dataset / 'test_old'))
+trainDataset = EarthObservationImageryDataset(trainDataset, datasetDetails['NumberOfLabelChannels'])
+valDataset = EarthObservationImageryDataset(valDataset, datasetDetails['NumberOfLabelChannels'])
+testDataset = EarthObservationImageryDataset(testDataset, datasetDetails['NumberOfLabelChannels'])
+inputChannels = datasetDetails['NumberOfInputChannels']
 
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
@@ -312,28 +312,31 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = UNet(inputChannels, len(colorDict.keys()))
+model = DeepResidualUNet(inputChannels, len(colorDict.keys()))
 startEpoch = 50
-baseName = 'UNet_Sigmoid_'
-to_save = {'model': model}
-# checkpoint_dir = Path(f"./checkpoints/{baseName}/")
-#
-# checkpoint = Checkpoint(
-#     to_save,
-#     checkpoint_dir,
-#     n_saved=5,
-#     filename_prefix=baseName,
-#     score_name='miou',
-#     greater_or_equal=True
-# )
+baseName = 'DeepResidualUNet_Sigmoid_FullData_'
+checkpoint_dir = Path(f"./checkpoints/{baseName}/")
 
-if startEpoch != 0:
-    stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
+if startEpoch != 0 and (fileList := os.listdir(checkpoint_dir)):
+    checkpoint = None
+    fileList.sort()
+    stateDict = torch.load(checkpoint_dir / fileList[-1], weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
     for key in removedKeys:
         if key in stateDict:
             del stateDict[key]
     model.load_state_dict(stateDict)
+else:
+    to_save = {'model': model}
+
+    checkpoint = Checkpoint(
+        to_save,
+        checkpoint_dir,
+        n_saved=5,
+        filename_prefix=baseName,
+        score_name='miou',
+        greater_or_equal=True,
+    )
 model = model.to(device)
 
 """# 4. Model Training"""
@@ -417,7 +420,7 @@ class ExpectedCalibrationError(Metric):
 
 
 class StaticCalibrationError(Metric):
-    def __init__(self, ignoredClass, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, ignoredClass: int | None, numBins: int, numClasses: int, outputTransform=lambda x: x, device:str="cpu"):
         self.ignoredClass = ignoredClass
         self.numBins = numBins
         self.numClasses = numClasses
@@ -480,7 +483,7 @@ class StaticCalibrationError(Metric):
 
 
 class AdaptiveExpectedCalibrationError(Metric):
-    def __init__(self, numBins, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, numBins:int, outputTransform=lambda x: x, device="cpu"):
         self.numBins = numBins
         self._data = torch.empty((0, 2))
         super(AdaptiveExpectedCalibrationError, self).__init__(output_transform=outputTransform, device=device)
@@ -517,7 +520,7 @@ class AdaptiveExpectedCalibrationError(Metric):
 
 
 class AdaptiveStaticCalibrationError(Metric):
-    def __init__(self, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, numBins:int, numClasses:int, outputTransform=lambda x: x, device:str="cpu"):
         self.numBins = numBins
         self.numClasses = numClasses
         self._data = torch.empty((0, self.numClasses + 1))
@@ -602,18 +605,20 @@ def evaluator_on_epoch_completed(engine):
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
-
-# evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
+# if checkpoint is not None:
+#     evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
 # ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
-
+ProgressBar().attach(evaluator)
 model.eval()
-# evaluator.run(valLoader, max_epochs=1)
-#
-from calibrate import calibrate
-from calibrationLoss import *
-temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, 6, AdaptiveStaticCalibrationErrorLoss(NUM_BINS, 6, device), device, epochs=100)
-temperature.requires_grad_(False)
+evaluator.run(valLoader, max_epochs=1)
 
-from plot import plot
-plot(model, testLoader, indexToIgnore, NUM_BINS, 6, baseName, device, temperature=temperature)
+# from calibrate import calibrate
+# from calibrationLoss import *
+# temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, 6, ExpectedCalibrationErrorLoss(indexToIgnore, NUM_BINS, device), device, epochs=10)
+# temperature.requires_grad_(False)
+#
+# from plot import plotReliabilityDiagram
+# plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, 6, baseName, device, temperature=temperature)
+# from plot import plotUncertainty
+# plotUncertainty(model, testLoader, Path('./classOutput/'), device)

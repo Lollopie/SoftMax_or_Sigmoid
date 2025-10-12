@@ -27,7 +27,7 @@ def calibrationStep(engine, batch):
     y_pred = y_pred / temperature.unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
     globalLoss(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
-def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, numClasses, loss, device, learningRate=5e-2, epochs=1):
+def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, numClasses, loss, device, learningRate=5e-0, epochs=1):
     global optimizer
     global temperature
     global globalDevice
@@ -38,7 +38,7 @@ def calibrate(model: nn.Module, valLoader, indexToIgnore, numBins, numClasses, l
     globalLoss = loss
     # model.eval()
     #Calibration: ECE = 0.045048683881759644, 1.493001937866211
-    temperature = torch.tensor(1.0, dtype=torch.float, requires_grad=True, device=device)
+    temperature = torch.ones(numClasses, dtype=torch.float, requires_grad=True, device=device)
     localOptimizer = torch.optim.SGD([temperature], lr=learningRate)
     engine = Engine(calibrationStep)
     ACC = Accuracy(output_transform)
