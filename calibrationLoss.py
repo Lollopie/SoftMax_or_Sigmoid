@@ -2,17 +2,21 @@ import torch
 from torch import nn
 from ignite.exceptions import NotComputableError
 class ExpectedCalibrationErrorLoss(nn.Module):
-    def __init__(self, indexToIgnore, numBins, device):
+    def __init__(self, indexToIgnore, numBins, device, softMax):
         super().__init__()
         self.indexToIgnore = indexToIgnore
         self.numBins = numBins
         self.device = device
+        self.softMax = softMax
         self._num_correct = torch.zeros(self.numBins, device=self.device)
         self._num_examples = torch.zeros(self.numBins, device=self.device)
         self._accumulated_confidence = torch.zeros(self.numBins, device=self.device)
     def forward(self, y_pred, y):
         y_pred, y = y_pred.reshape(y_pred.shape[1], -1), y.reshape(-1, 1)
-        confidences = torch.max(torch.sigmoid(y_pred), dim=0)
+        if self.softMax:
+            confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        else:
+            confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
@@ -43,18 +47,22 @@ class ExpectedCalibrationErrorLoss(nn.Module):
         self._accumulated_confidence = torch.zeros(self.numBins, device=self.device)
         return ECE
 class StaticCalibrationErrorLoss(nn.Module):
-    def __init__(self, indexToIgnore, numBins, numClasses, device):
+    def __init__(self, indexToIgnore, numBins, numClasses, device, softMax):
         super().__init__()
         self.indexToIgnore = indexToIgnore if indexToIgnore is not None else -1
         self.numBins = numBins
         self.device = device
         self.numClasses = numClasses
+        self.softMax = softMax
         self._num_correct = torch.zeros(self.numBins, self.numClasses, device=self.device)
         self._num_examples = torch.zeros(self.numBins, self.numClasses, device=self.device)
         self._accumulated_confidence = torch.zeros(self.numBins, self.numClasses, device=self.device)
     def forward(self, y_pred, y):
         y_pred, y = y_pred.reshape(self.numClasses, -1), y.reshape(-1, 1)
-        confidences = torch.sigmoid(y_pred)
+        if self.softMax:
+            confidences = torch.softmax(y_pred, dim=0)
+        else:
+            confidences = torch.sigmoid(y_pred)
         indices = torch.argmax(confidences, dim=0).reshape(-1, 1)
         mask = (y != self.indexToIgnore)
         mask &= (indices != self.indexToIgnore)
@@ -91,14 +99,18 @@ class StaticCalibrationErrorLoss(nn.Module):
         return SCE
 
 class AdaptiveExpectedCalibrationErrorLoss(nn.Module):
-    def __init__(self, numBins, device):
+    def __init__(self, numBins, device, softMax):
         super().__init__()
         self.numBins = numBins
         self.device = device
+        self.softMax = softMax
         self._data = torch.empty((0, 2)).to(self.device)
     def forward(self, y_pred, y):
         y_pred, y = y_pred.reshape(y_pred.shape[1], -1), y.reshape(-1, 1)
-        confidences = torch.max(torch.sigmoid(y_pred), dim=0)
+        if self.softMax:
+            confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        else:
+            confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         correct = torch.eq(indices, y).reshape(-1)
         confidences = confidences.values.reshape(-1)
@@ -120,15 +132,19 @@ class AdaptiveExpectedCalibrationErrorLoss(nn.Module):
         self._data = torch.empty((0, 2), device=self.device)
         return AECE
 class AdaptiveStaticCalibrationErrorLoss(nn.Module):
-    def __init__(self, numBins, numClasses, device):
+    def __init__(self, numBins, numClasses, device, softMax):
         super().__init__()
         self.numBins = numBins
         self.numClasses = numClasses
         self.device = device
+        self.softMax = softMax
         self._data = torch.empty((0, self.numClasses + 1), device=self.device)
     def forward(self, y_pred, y):
         y_pred, y = y_pred.reshape(y_pred.shape[1], -1), y.reshape(-1, 1)
-        confidences = torch.sigmoid(y_pred).to(self.device)
+        if self.softMax:
+            confidences = torch.softmax(y_pred, dim=0).to(self.device)
+        else:
+            confidences = torch.sigmoid(y_pred).to(self.device)
         indices = torch.argmax(confidences, dim=0).reshape(-1, 1)
         correct = torch.eq(indices, y).reshape(-1, 1).to(self.device)
         self._data = torch.cat((torch.cat((y_pred.T, correct), dim=1), self._data), dim=0)

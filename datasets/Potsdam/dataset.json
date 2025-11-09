@@ -3,8 +3,10 @@
   "InputDirectory": "Input",
   "LabelDirectory": "Label",
   "ImageSize": 6000,
-  "TargetImageSize": 512,
-  "NumberOfImagesPerInputImage": 10,
+  "TargetImageSizeTrain": 512,
+  "TargetImageSizeVal": 512,
+  "TargetImageSizeTest": 512,
+  "NumberOfImagesPerInputImage": 50,
   "NumberOfLabelChannels": 3,
   "NumberOfInputChannels": 3,
   "LabelMapping": [
