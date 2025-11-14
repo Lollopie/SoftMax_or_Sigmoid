@@ -1,4 +1,9 @@
+import os
+from typing import Any
+
+import rasterio
 from ignite.engine import Engine
+from ignite.handlers import ProgressBar, Checkpoint
 from ignite.metrics import ConfusionMatrix
 from ignite.metrics import mIoU
 from ignite.metrics import Metric
@@ -6,7 +11,7 @@ from ignite.metrics import Accuracy
 from ignite.exceptions import NotComputableError
 from ignite.metrics.metric import sync_all_reduce, reinit__is_reduced
 from ignite.engine import Events
-
+import time
 from PIL import Image
 import torch
 import torch.utils.data
@@ -15,8 +20,9 @@ from torchvision.transforms import v2
 from torchvision import tv_tensors
 from torch import nn
 import numpy as np
-
+import json
 from pathlib import Path
+
 
 # p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
 
@@ -28,28 +34,33 @@ transformPILImageToTvTensorImage = v2.Compose(
     ]
 )
 
-colorDict = {torch.tensor([0, 0, 255]): 0,
-             torch.tensor([0, 255, 0]): 1,
-             torch.tensor([0, 255, 255]): 2,
-             torch.tensor([255, 0, 0]): 3,
-             torch.tensor([255, 255, 0]): 4,
-             torch.tensor([255, 255, 255]): 5,}
-indexToIgnore = None
-
 """#TODO: Properly set ignore index
 
 # 2. Dataset Setup
 """
-targetHeight = 512
-targetWidth = 512
+dataset = Path('./datasets/Potsdam')
+with open(dataset / 'dataset.json') as f:
+    datasetDetails = json.load(f)
+colorDict = {}
+for i, color in enumerate(datasetDetails['LabelMapping']):
+    colorDict[torch.tensor([color['R'], color['G'], color['B']])] = i
+indexToIgnore = None
+targetHeightTrain = datasetDetails['TargetImageSizeTrain']
+targetHeightVal = datasetDetails['TargetImageSizeVal']
+targetHeightTest = datasetDetails['TargetImageSizeTest']
+targetWidthTrain = datasetDetails['TargetImageSizeTrain']
+targetWidthVal = datasetDetails['TargetImageSizeVal']
+targetWidthTest = datasetDetails['TargetImageSizeTest']
 
-def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]):
+def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int], numberOfLabelChannels: int, targetHeight: int, targetWidth: int):
     label = label.to(torch.int64)
-    label2D = label.reshape(3, -1).transpose(0, 1)
-    indexMap = torch.zeros(label2D.shape[0])
-    for color, index in colorDictionary.items():
-        indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
-    indexMap = indexMap.to(torch.int64)
+    label2D = label.reshape(numberOfLabelChannels, -1).transpose(0, 1)
+    indexMap = label2D.reshape(-1)
+    if numberOfLabelChannels > 1:
+        indexMap = torch.zeros(label2D.shape[0])
+        for color, index in colorDictionary.items():
+            indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
+        indexMap = indexMap.to(torch.int64)
     labelOHE = nn.functional.one_hot(indexMap, num_classes=len(colorDictionary.keys())).transpose(0, 1).reshape(
         len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
     return labelOHE, indexMap.reshape(targetHeight, targetWidth)
@@ -57,50 +68,47 @@ def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]
 transformInputImage = v2.Compose(
     [
         v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
 
+class EarthObservationImageryDataset(Dataset):
+    def __init__(self, listOfPaths, numberOfLabelChannels, targetHeight, targetWidth):
+        self.listOfPaths = listOfPaths
+        self.numberOfLabelChannels = numberOfLabelChannels
+        self.targetHeight = targetHeight
+        self.targetWidth = targetWidth
+
+    def __getitem__(self, idx):
+        img = Image.open(self.listOfPaths[idx])
+        labelSrc = rasterio.open(str(self.listOfPaths[idx]).replace('Images', 'Labels').replace('rgb', 'label'), mode='r')
+        label = labelSrc.read(list(range(1, self.numberOfLabelChannels+1))).astype(np.uint8)
+        imgTransformed = transformInputImage(transformPILImageToTvTensorImage(img))
+        labelTransformed = transformLabel(torch.tensor(label), colorDict, self.numberOfLabelChannels, self.targetHeight, self.targetWidth)
+        return {'img': imgTransformed, 'label': labelTransformed}
+
+    def __len__(self):
+        return len(self.listOfPaths)
 
 def loadDataset(basePath: Path):
     dataset = []
-    pathGenerator = basePath.rglob('*.tif')
+    pathGenerator = (basePath / 'Images').rglob('*.tif')
     for path in pathGenerator:
-        img = Image.open(basePath / path.name)
-        label = Image.open(basePath / path.name.replace('rgb', 'label'))
-        imgTransformed = transformInputImage(transformPILImageToTvTensorImage(img))
-        labelTransformed = transformLabel(transformPILImageToTvTensorImage(label), colorDict)
-        dataObject = {'img': imgTransformed, 'label': labelTransformed}
-        dataset.append(dataObject)
+        dataset.append(path)
     return dataset
 
-
-trainDataset = loadDataset(Path('./trainImages'))
-valDataset = loadDataset(Path('./validationImages'))
-testDataset = loadDataset(Path('./testImages'))
-inputChannels = trainDataset[0]['img'].shape[0]
-
-class ImageDataset(Dataset):
-    def __init__(self, dataset):
-        self.data = dataset
-        self.len = len(dataset)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-    def __len__(self):
-        return self.len
-
-
-trainDataset = ImageDataset(trainDataset)
-valDataset = ImageDataset(valDataset)
-testDataset = ImageDataset(testDataset)
+trainDataset = loadDataset(Path(dataset / 'train'))
+valDataset = loadDataset(Path(dataset / 'val'))
+testDataset = loadDataset(Path(dataset / 'test'))
+trainDataset = EarthObservationImageryDataset(trainDataset, datasetDetails['NumberOfLabelChannels'], targetHeightTrain, targetWidthTrain)
+valDataset = EarthObservationImageryDataset(valDataset, datasetDetails['NumberOfLabelChannels'], targetHeightVal, targetWidthVal)
+testDataset = EarthObservationImageryDataset(testDataset, datasetDetails['NumberOfLabelChannels'], targetHeightTest, targetWidthTest)
+inputChannels = datasetDetails['NumberOfInputChannels']
 
 TRAIN_BATCH_SIZE = 1
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 LEARNING_RATE = 1e-04
-EPOCHS = 50
+EPOCHS = 20
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 trainLoader = DataLoader(trainDataset, batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0, drop_last=True)
@@ -312,20 +320,38 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
-startEpoch = 50
-baseName = 'AtrousDenseUDeconvNet_258_2d_'
-if startEpoch != 0:
-    stateDict = torch.load(Path('./') / (baseName + str(startEpoch)), weights_only=True)
+model = UNet(inputChannels, len(colorDict.keys()))
+startEpoch = 20
+softMax = True
+lossType = 'Softmax' if softMax else 'Sigmoid'
+baseName = model.__class__.__name__ + '_' + lossType + dataset.name
+# checkpoint_dir = Path(f"./checkpoints/UNet_Sigmoid_ActualData_/")
+checkpoint_dir = Path(f"./checkpoints/{baseName}/")
+if startEpoch != 0 and (fileList := os.listdir(checkpoint_dir)):
+    checkpoint = None
+    fileList.sort()
+    stateDict = torch.load(checkpoint_dir / fileList[-1], weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
     for key in removedKeys:
-        del stateDict[key]
+        if key in stateDict:
+            del stateDict[key]
     model.load_state_dict(stateDict)
+else:
+    to_save = {'model': model}
+
+    checkpoint = Checkpoint(
+        to_save,
+        checkpoint_dir,
+        n_saved=5,
+        filename_prefix=baseName,
+        score_name='miou',
+        greater_or_equal=True,
+    )
 model = model.to(device)
 
 """# 4. Model Training"""
 
-lossFunction = nn.CrossEntropyLoss()
+lossFunction = nn.CrossEntropyLoss() if softMax else nn.BCEWithLogitsLoss()
 optimizer = torch.optim.AdamW(params=model.parameters(), lr=LEARNING_RATE)
 
 
@@ -354,12 +380,13 @@ def evaluation_step(engine, batch):
 
 
 class ExpectedCalibrationError(Metric):
-    def __init__(self, ignoredClass, numBins: torch.Tensor, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, ignoredClass, numBins: torch.Tensor, softMax: bool, outputTransform=lambda x: x, device="cpu"):
         self.ignoredClass = ignoredClass
         self.numBins = numBins
         self._num_correct = torch.zeros(numBins)
         self._num_examples = torch.zeros(numBins)
         self._accumulated_confidence = torch.zeros(numBins)
+        self.softMax = softMax
         super(ExpectedCalibrationError, self).__init__(output_transform=outputTransform, device=device)
 
     @reinit__is_reduced
@@ -372,8 +399,10 @@ class ExpectedCalibrationError(Metric):
     @reinit__is_reduced
     def update(self, output):
         y_pred, y = output[0].detach().reshape(output[0].shape[1], -1), output[1].detach().reshape(-1, 1)
-
-        confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        if self.softMax:
+            confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        else:
+            confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
         mask &= (indices != self.ignoredClass)
@@ -404,7 +433,7 @@ class ExpectedCalibrationError(Metric):
 
 
 class StaticCalibrationError(Metric):
-    def __init__(self, ignoredClass, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, ignoredClass: int | None, numBins: int, numClasses: int, outputTransform=lambda x: x, device:str="cpu"):
         self.ignoredClass = ignoredClass
         self.numBins = numBins
         self.numClasses = numClasses
@@ -467,7 +496,7 @@ class StaticCalibrationError(Metric):
 
 
 class AdaptiveExpectedCalibrationError(Metric):
-    def __init__(self, numBins, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, numBins:int, outputTransform=lambda x: x, device="cpu"):
         self.numBins = numBins
         self._data = torch.empty((0, 2))
         super(AdaptiveExpectedCalibrationError, self).__init__(output_transform=outputTransform, device=device)
@@ -504,7 +533,7 @@ class AdaptiveExpectedCalibrationError(Metric):
 
 
 class AdaptiveStaticCalibrationError(Metric):
-    def __init__(self, numBins, numClasses, outputTransform=lambda x: x, device="cpu"):
+    def __init__(self, numBins:int, numClasses:int, outputTransform=lambda x: x, device:str="cpu"):
         self.numBins = numBins
         self.numClasses = numClasses
         self._data = torch.empty((0, self.numClasses + 1))
@@ -546,18 +575,48 @@ def output_transform(output):
     y = output['label']
     return y_pred, y
 
+class ClassWiseAccuracy(Metric):
+    def __init__(self, numClasses: int, device: str, outputTransform=lambda x: x):
+        self.numClasses = numClasses
+        self.numCorrect = torch.zeros(numClasses, device=device)
+        self.numExamples = torch.zeros(numClasses, device=device)
+        super(ClassWiseAccuracy, self).__init__(output_transform=outputTransform, device=device)
+    def reset(self) -> None:
+        self.numCorrect = torch.zeros(self.numClasses, device=device)
+        self.numExamples = torch.zeros(self.numClasses, device=device)
+        super(ClassWiseAccuracy, self).reset()
 
-NUM_BINS = torch.tensor(5)
+    def update(self, output: Any) -> None:
+        y_pred, y = output[0].detach().reshape(self.numClasses, -1), output[1].detach().reshape(-1)
+
+        indices = torch.argmax(y_pred, dim=0)
+        correct = torch.eq(indices, y).view(-1)
+        correctClasses = indices[correct]
+        counts = torch.unique(correctClasses, return_counts=True)
+        for classIndex, count in zip(counts[0], counts[1]):
+            self.numCorrect[classIndex] += count
+        for classIndex in range(self.numClasses):
+            self.numExamples[classIndex] += torch.sum(torch.eq(y, classIndex))
+
+    def compute(self) -> Any:
+        if torch.any(torch.eq(self.numExamples, 0)):
+            raise NotComputableError('ClassWiseAccuracy must have at least one example per class before it can be computed.')
+        print(self.numExamples / torch.sum(self.numExamples))
+        return self.numCorrect / self.numExamples
+
+NUM_BINS = torch.tensor(50)
 trainer = Engine(train_step)
 evaluator = Engine(evaluation_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
+cm.attach(evaluator, 'cm')
 metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
-ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, output_transform)
+ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, softMax, output_transform)
 ECE.attach(evaluator, "ECE")
 ACC = Accuracy(output_transform)
 ACC.attach(evaluator, 'acc')
-
+CACC = ClassWiseAccuracy(len(colorDict.keys()), device, output_transform)
+CACC.attach(evaluator, 'cacc')
 
 # SCE = StaticCalibrationError(indexToIgnore, NUM_BINS, torch.tensor(len(colorDict.keys())), output_transform)
 # SCE.attach(evaluator, "SCE")
@@ -570,10 +629,10 @@ def trainer_on_epoch_completed(engine):
     epoch = engine.state.epoch
     loss = engine.state.output['loss']
     print(f'Epoch {epoch}: train_loss = {loss}', end=" ")
-    torch.save(model.state_dict(), Path('./') / (baseName + str(epoch + startEpoch)))
     model.eval()
     with torch.no_grad():
         evaluator.run(valLoader, max_epochs=1)
+
 
 
 @evaluator.on(Events.EPOCH_COMPLETED)
@@ -581,16 +640,37 @@ def evaluator_on_epoch_completed(engine):
     loss = engine.state.output['loss']
     miou = engine.state.metrics['miou']
     ece = engine.state.metrics['ECE']
+    cacc = engine.state.metrics['cacc']
+    cm = engine.state.metrics['cm']
     # sce = engine.state.metrics['SCE']
     # aece = engine.state.metrics['AECE']
     # asce = engine.state.metrics['ASCE']
     acc = engine.state.metrics['acc']
-    print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}'
+    print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}, CACC = {cacc}, cm = {cm}',
           # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
           )
 
+if checkpoint is not None:
+    evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
+# ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
+# ProgressBar().attach(evaluator)
 model.eval()
-evaluator.run(testLoader, max_epochs=1)
+# evaluator.run(testLoader, max_epochs=1)
+#
 # from calibrate import calibrate
-# calibrate(model, valLoader, indexToIgnore, NUM_BINS, device, epochs=50)
+# from calibrationLoss import *
+
+# temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), ExpectedCalibrationErrorLoss(indexToIgnore, NUM_BINS, device, softMax), device, softMax, epochs=50)
+# print(temperature)
+# temperature.requires_grad_(False)
+if softMax:
+    temperature = torch.tensor(1.0, device=device)
+else:
+    temperature = torch.ones(len(colorDict.keys()), device=device)
+from plot import plotReliabilityDiagram
+plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), checkpoint_dir, device, softMax, temperature = temperature)
+# from plot import plotRandomImageClassOutput
+# plotRandomImageClassOutput(model, testLoader, checkpoint_dir, device, colorDict, targetHeightTest, targetWidthTest, len(colorDict.keys()))
+# from plot import plotUncertainty
+# plotUncertainty(model, testLoader, checkpoint_dir, device, softMax=softMax)

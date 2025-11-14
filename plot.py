@@ -1,0 +1,170 @@
+import torch
+import torchvision.transforms
+from ignite.engine import Engine, Events
+from matplotlib import pyplot as plt
+import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from torch import nn
+from pathlib import Path
+import datetime
+from tqdm import tqdm
+class AccuracyUncertaintyPlot(nn.Module):
+    def __init__(self, indexToIgnore, numBins, numClasses, savePath, plotTitle, device, softMax):
+        #maybe add option for device
+        super().__init__()
+        self.indexToIgnore = indexToIgnore
+        self.numBins = numBins
+        self.numClasses = numClasses
+        self.softMax = softMax
+        self._device = device
+        self._num_correct = torch.zeros(self.numBins).to(self._device)
+        self._num_examples = torch.zeros(self.numBins).to(self._device)
+        self._accumulated_confidence = torch.zeros(self.numBins).to(self._device)
+        self.plotTitle = plotTitle
+        self.savePath = savePath
+        self.iteration = 0
+    def forward(self, y_pred, y):
+        y_pred, y = y_pred.reshape(self.numClasses, -1), y.reshape(-1, 1)
+        if self.softMax:
+            confidences = torch.max(torch.softmax(y_pred, dim=0), dim=0)
+        else:
+            confidences = torch.max(torch.sigmoid(y_pred), dim=0)
+        indices = confidences.indices.reshape(-1, 1)
+        mask = (y != self.indexToIgnore)
+        mask &= (indices != self.indexToIgnore)
+        y_filtered = y[mask]
+        indices = indices[mask]
+
+        #Accuracy after Guo et al.
+        correct = torch.eq(indices, y_filtered).reshape(-1)
+        confidences = confidences.values.reshape(-1, 1)[mask].reshape(-1)
+        for bin in range(self.numBins):
+            mask = torch.logical_and((bin / self.numBins) < confidences, confidences <= ((bin + 1) / self.numBins))
+
+            self._num_correct[bin] += torch.sum(correct[mask]).to(self._device)
+            self._num_examples[bin] += torch.sum(mask).to(self._device)
+            self._accumulated_confidence[bin] += torch.sum(confidences[mask]).to(self._device)
+    def compute(self):
+        confidence = (self._accumulated_confidence / self._num_examples).to('cpu')
+        accuracy = (self._num_correct / self._num_examples).to('cpu')
+        edges = (torch.arange(self.numBins) / self.numBins + 1 / (2 * self.numBins)).to('cpu')
+        frequency = (self._num_examples).to('cpu').numpy()
+
+        fig, ax = plt.subplots(2, sharex=True)
+        ax[0].set_xlim(0, 1)
+        ax[0].set_ylim(0, 1)
+        ax[0].set_ylabel('accuracy')
+        ax[0].bar(edges.numpy(), accuracy, width=0.9 / self.numBins, label='accuracy')
+        diag = np.linspace(0, 1, 100)
+        ax[0].bar(edges.numpy(), torch.where(confidence < accuracy, confidence, 0), width=0.9 / self.numBins, color='xkcd:light pink', zorder=5, label='mean confidence')
+        ax[0].bar(edges.numpy(), torch.where(confidence > accuracy, confidence, 0), width=0.9 / self.numBins, color='xkcd:light pink', zorder=-5)
+        ax[0].plot(diag, diag, 'r', zorder=10)
+        ax[0].plot(edges.numpy(), accuracy, 'bo', zorder=9)
+        ax[0].legend()
+        ax[1].bar(edges.numpy(), frequency, width=0.9 / self.numBins)
+        ax[1].set_xlabel('confidence')
+        ax[1].set_ylabel('number of samples')
+        ax[1].set_yscale('log')
+        ax[0].title.set_text(self.plotTitle)
+        plt.savefig(self.savePath / '{date:%Y-%m-%d_%H-%M-%S}.png'.format(date=datetime.datetime.now()))
+        self._num_correct = torch.zeros(self.numBins)
+        self._num_examples = torch.zeros(self.numBins)
+        self._accumulated_confidence = torch.zeros(self.numBins)
+        self.iteration += 1
+
+globalTemperature = None
+globalDevice = None
+globalModel = None
+globalSoftMax = None
+accuracyUncertaintyPlot = None
+
+def plotStep(engine, batch):
+    img = batch['img']
+    labelOHE, label = batch['label']
+    img = img.to(globalDevice)
+    label = label.to(globalDevice).to(torch.int64)
+    y_pred = globalModel(img).squeeze(1)
+    if globalSoftMax:
+        y_pred = y_pred / globalTemperature
+    else:
+        y_pred = y_pred / globalTemperature.unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
+    accuracyUncertaintyPlot(y_pred, label)
+    return {'y_pred': y_pred, 'label': label}
+
+def plotReliabilityDiagram(model: nn.Module, testLoader, indexToIgnore, numBins, numClasses, savePath, device, softMax, epochs=1, temperature=torch.tensor(1.0)):
+    global globalTemperature
+    global accuracyUncertaintyPlot
+    global globalDevice
+    global globalModel
+    global globalSoftMax
+    globalDevice = device
+    globalModel = model
+    globalSoftMax = softMax
+    if softMax:
+        accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, savePath, f"Temperature: {str(temperature.item()).replace('.',',')}", device, softMax)
+    else:
+        accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, savePath,
+                                                          f"Temperature: {str(temperature).replace('.', ',')}",
+                                                          device, softMax)
+    globalTemperature = temperature
+    engine = Engine(plotStep)
+    model.requires_grad_(False)
+    @engine.on(Events.EPOCH_COMPLETED)
+    def evaluatorOnEpochCompleted(engine):
+        accuracyUncertaintyPlot.compute()
+    with torch.no_grad():
+        engine.run(testLoader, max_epochs=epochs)
+    # Reset Previous State
+    model.requires_grad_(True)
+
+def plotRandomImageClassOutput(model:nn.Module, testLoader, savePath: Path, device, colorDict, targetHeight: int, targetWidth: int, numClasses: int):
+    #TODO: Maybe add temperature support
+    colorChannels = list(colorDict.keys())[0].shape[0]
+    colorTensor = torch.zeros((colorChannels, len(colorDict.keys())))
+    for i, color in enumerate(colorDict.keys()):
+        colorTensor[:, i] = color
+    colorTensor = colorTensor.to(device)
+    savePath = (savePath / '{date:%Y-%m-%d_%H-%M-%S}'.format( date=datetime.datetime.now()))
+    savePath.mkdir(parents=True, exist_ok=False)
+    for i, batch in enumerate(tqdm(testLoader)):
+        image = batch['img'].to(device)
+        labelOHE = batch['label'][0].to(device)
+        label = batch['label'][1]
+        y_pred = model(image)
+        classMap = torch.argmax(y_pred, dim=1).squeeze(0)
+        #Speed up conversion using OHE and matrix multiplication somehow
+        classMap = classMap.reshape(-1)
+        resultOHE = nn.functional.one_hot(classMap, numClasses).T.to(torch.float)
+        result = (colorTensor @ resultOHE).reshape(colorChannels, targetHeight, targetWidth)
+        labelOHE = labelOHE.reshape(numClasses, -1).to(torch.float)
+        original = (colorTensor @ labelOHE).reshape(colorChannels, targetHeight, targetWidth)
+        inputImage = image
+        (savePath / str(i)).mkdir(parents=True, exist_ok=False)
+        torchvision.utils.save_image(inputImage, savePath / str(i) / 'input.png')
+        torchvision.utils.save_image(result / 255.0, savePath / str(i) / 'result.png')
+        torchvision.utils.save_image(original / 255.0, savePath / str(i) / 'original.png')
+def uncertaintyFunctionInverse(inputTensor):
+    return 1 - inputTensor
+
+def plotUncertainty(model:nn.Module, testLoader, savePath, device, uncertaintyFunction = lambda x : 1 - x, softMax = True):
+    #TODO: Maybe add temperature support
+    savePath = (savePath / '{date:%Y-%m-%d_%H-%M-%S}'.format(date=datetime.datetime.now()))
+    savePath.mkdir(parents=True, exist_ok=False)
+    for i, batch in enumerate(tqdm(testLoader)):
+        image = batch['img'].to(device)
+        labelOHE = batch['label'][0]
+        label = batch['label'][1]
+        y_pred = model(image)
+        if softMax:
+            uncertaintyMap = torch.softmax(y_pred, dim=1)
+        else:
+            uncertaintyMap = torch.sigmoid(y_pred)
+        uncertaintyMap = torch.max(uncertaintyMap, dim=1).values
+        uncertaintyMap = uncertaintyFunction(uncertaintyMap)
+        fig, ax = plt.subplots()
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        im = ax.imshow(uncertaintyMap.squeeze(0).cpu().detach().numpy(), cmap='seismic', vmin=0, vmax=1)
+        fig.colorbar(im, cax=cax, orientation='vertical')
+        plt.savefig(savePath / f'{i}.png')
+        plt.close(fig)
