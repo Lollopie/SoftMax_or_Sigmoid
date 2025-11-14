@@ -5,7 +5,7 @@
   "ImageSize": 1024,
   "TargetImageSizeTrain": 256,
   "TargetImageSizeVal": 256,
-  "TargetImageSizeTest": 256,
+  "TargetImageSizeTest": 1024,
   "NumberOfImagesPerInputImage": 5,
   "NumberOfLabelChannels": 1,
   "NumberOfInputChannels": 1,

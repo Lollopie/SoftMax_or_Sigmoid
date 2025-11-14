@@ -11,7 +11,7 @@ from ignite.metrics import Accuracy
 from ignite.exceptions import NotComputableError
 from ignite.metrics.metric import sync_all_reduce, reinit__is_reduced
 from ignite.engine import Events
-
+import time
 from PIL import Image
 import torch
 import torch.utils.data
@@ -38,7 +38,7 @@ transformPILImageToTvTensorImage = v2.Compose(
 
 # 2. Dataset Setup
 """
-dataset = Path('./datasets/2025 Data Fusion RGB')
+dataset = Path('./datasets/Potsdam')
 with open(dataset / 'dataset.json') as f:
     datasetDetails = json.load(f)
 colorDict = {}
@@ -320,9 +320,9 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = AtrousDenseUDeconvNet(inputChannels, len(colorDict.keys()))
+model = UNet(inputChannels, len(colorDict.keys()))
 startEpoch = 20
-softMax = False
+softMax = True
 lossType = 'Softmax' if softMax else 'Sigmoid'
 baseName = model.__class__.__name__ + '_' + lossType + dataset.name
 # checkpoint_dir = Path(f"./checkpoints/UNet_Sigmoid_ActualData_/")
@@ -330,7 +330,6 @@ checkpoint_dir = Path(f"./checkpoints/{baseName}/")
 if startEpoch != 0 and (fileList := os.listdir(checkpoint_dir)):
     checkpoint = None
     fileList.sort()
-    # 13
     stateDict = torch.load(checkpoint_dir / fileList[-1], weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
     for key in removedKeys:
@@ -605,7 +604,7 @@ class ClassWiseAccuracy(Metric):
         print(self.numExamples / torch.sum(self.numExamples))
         return self.numCorrect / self.numExamples
 
-NUM_BINS = torch.tensor(5)
+NUM_BINS = torch.tensor(50)
 trainer = Engine(train_step)
 evaluator = Engine(evaluation_step)
 cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
@@ -665,13 +664,13 @@ model.eval()
 # temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), ExpectedCalibrationErrorLoss(indexToIgnore, NUM_BINS, device, softMax), device, softMax, epochs=50)
 # print(temperature)
 # temperature.requires_grad_(False)
-# if softMax:
-#     temperature = torch.tensor(1.0, device=device)
-# else:
-#     temperature = torch.ones(len(colorDict.keys()), device=device)
-# from plot import plotReliabilityDiagram
-# plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), checkpoint_dir, device, softMax, temperature = temperature)
+if softMax:
+    temperature = torch.tensor(1.0, device=device)
+else:
+    temperature = torch.ones(len(colorDict.keys()), device=device)
+from plot import plotReliabilityDiagram
+plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), checkpoint_dir, device, softMax, temperature = temperature)
 # from plot import plotRandomImageClassOutput
-# plotRandomImageClassOutput(model, testLoader, checkpoint_dir, device, colorDict, targetHeight, targetWidth, len(colorDict.keys()))
-from plot import plotUncertainty
-plotUncertainty(model, testLoader, checkpoint_dir, device, softMax=softMax)
+# plotRandomImageClassOutput(model, testLoader, checkpoint_dir, device, colorDict, targetHeightTest, targetWidthTest, len(colorDict.keys()))
+# from plot import plotUncertainty
+# plotUncertainty(model, testLoader, checkpoint_dir, device, softMax=softMax)
