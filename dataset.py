@@ -6,7 +6,7 @@ from torchvision.transforms import v2
 import numpy as np
 from pathlib import Path
 
-dataset = Path('./datasets/2025 Data Fusion RGB')
+dataset = Path('./datasets/2025 Data Fusion RGB 224')
 with open(dataset / 'dataset.json') as f:
     datasetDetails = json.load(f)
 pathlist = (dataset / datasetDetails['InputDirectory']).rglob('*.tif')
@@ -25,16 +25,34 @@ trainNumber = np.ceil(len(paths) * 0.6)
 testNumber = np.ceil(len(paths) * 0.2)
 valNumber = len(paths) - trainNumber - testNumber
 N = datasetDetails['NumberOfImagesPerInputImage']
-targetHeight = datasetDetails['TargetImageSize']
-targetWidth = datasetDetails['TargetImageSize']
+targetHeightTrain = datasetDetails['TargetImageSizeTrain']
+targetHeightVal = datasetDetails['TargetImageSizeVal']
+targetHeightTest = datasetDetails['TargetImageSizeTest']
+targetWidthTrain = datasetDetails['TargetImageSizeTrain']
+targetWidthVal = datasetDetails['TargetImageSizeVal']
+targetWidthTest = datasetDetails['TargetImageSizeTest']
 toImageTransform = v2.Compose(
     [
         v2.ToImage(),
     ]
 )
-datasetTransformation = v2.Compose(
+datasetTransformationTrain = v2.Compose(
     [
-        v2.RandomCrop((targetHeight, targetWidth)),
+        v2.RandomCrop((targetHeightTrain, targetWidthTrain)),
+        v2.RandomHorizontalFlip(0.5),
+        v2.RandomVerticalFlip(0.5),
+    ]
+)
+datasetTransformationVal = v2.Compose(
+    [
+        v2.RandomCrop((targetHeightVal, targetWidthVal)),
+        v2.RandomHorizontalFlip(0.5),
+        v2.RandomVerticalFlip(0.5),
+    ]
+)
+datasetTransformationTest = v2.Compose(
+    [
+        v2.RandomCrop((targetHeightTest, targetWidthTest)),
         v2.RandomHorizontalFlip(0.5),
         v2.RandomVerticalFlip(0.5),
     ]
@@ -50,6 +68,7 @@ for index, path in enumerate(paths):
     img = toImageTransform(img)
     label = toImageTransform(label)
     savePath = trainPath if index < trainNumber else (testPath if index < trainNumber + testNumber else valPath)
+    datasetTransformation = datasetTransformationTrain if index < trainNumber else (datasetTransformationTest if index < trainNumber + testNumber else datasetTransformationVal)
     for i in range(N):
         sampleImg, sampleLabel = datasetTransformation(img, label)
         sampleImg = inputTransformation(sampleImg)

@@ -65,7 +65,8 @@ class AccuracyUncertaintyPlot(nn.Module):
         ax[1].set_xlabel('confidence')
         ax[1].set_ylabel('number of samples')
         ax[1].set_yscale('log')
-        ax[0].title.set_text(self.plotTitle)
+        with open(self.savePath / 'calibration.txt', 'a') as f:
+            f.write(self.plotTitle.__str__())
         plt.savefig(self.savePath / '{date:%Y-%m-%d_%H-%M-%S}.png'.format(date=datetime.datetime.now()))
         self._num_correct = torch.zeros(self.numBins)
         self._num_examples = torch.zeros(self.numBins)
@@ -85,9 +86,9 @@ def plotStep(engine, batch):
     label = label.to(globalDevice).to(torch.int64)
     y_pred = globalModel(img).squeeze(1)
     if globalSoftMax:
-        y_pred = y_pred / globalTemperature
+        y_pred = y_pred / globalTemperature.reshape(-1).unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
     else:
-        y_pred = y_pred / globalTemperature.unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
+        y_pred = y_pred / globalTemperature.reshape(-1).unsqueeze(1).unsqueeze(1).repeat(1, y_pred.shape[2], y_pred.shape[3])
     accuracyUncertaintyPlot(y_pred, label)
     return {'y_pred': y_pred, 'label': label}
 
@@ -101,7 +102,7 @@ def plotReliabilityDiagram(model: nn.Module, testLoader, indexToIgnore, numBins,
     globalModel = model
     globalSoftMax = softMax
     if softMax:
-        accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, savePath, f"Temperature: {str(temperature.item()).replace('.',',')}", device, softMax)
+        accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, savePath, f"Temperature: {str(temperature).replace('.',',')}", device, softMax)
     else:
         accuracyUncertaintyPlot = AccuracyUncertaintyPlot(indexToIgnore, numBins, numClasses, savePath,
                                                           f"Temperature: {str(temperature).replace('.', ',')}",
@@ -168,3 +169,15 @@ def plotUncertainty(model:nn.Module, testLoader, savePath, device, uncertaintyFu
         fig.colorbar(im, cax=cax, orientation='vertical')
         plt.savefig(savePath / f'{i}.png')
         plt.close(fig)
+
+def plotLearningGraph(basePath: Path, propertyName: str):
+    x = []
+    with open(basePath / 'results.txt', 'r') as f:
+        for line in f:
+            x.append(float(line.split(propertyName + " = ")[1].split('\n')[0].split(',')[0]))
+    plt.scatter(list(range(len(x))), x)
+    plt.ylabel(propertyName)
+    plt.xlabel('Epoch')
+    plt.xticks(list(range(len(x))))
+    plt.savefig(basePath / f'{propertyName}.png')
+    plt.close()

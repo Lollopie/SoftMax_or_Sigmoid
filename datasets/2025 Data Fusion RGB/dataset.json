@@ -5,10 +5,11 @@
   "ImageSize": 1024,
   "TargetImageSizeTrain": 256,
   "TargetImageSizeVal": 256,
-  "TargetImageSizeTest": 1024,
+  "TargetImageSizeTest": 256,
   "NumberOfImagesPerInputImage": 5,
   "NumberOfLabelChannels": 1,
   "NumberOfInputChannels": 3,
+  "IndexToIgnore": 0,
   "LabelMapping": [
     {
       "R": 0,

@@ -22,7 +22,7 @@ from torch import nn
 import numpy as np
 import json
 from pathlib import Path
-
+import argparse
 
 # p = Path('/content/drive/MyDrive/') if Path('/content/drive/MyDrive/').exists() else Path('.')
 
@@ -34,17 +34,22 @@ transformPILImageToTvTensorImage = v2.Compose(
     ]
 )
 
-"""#TODO: Properly set ignore index
-
 # 2. Dataset Setup
-"""
-dataset = Path('./datasets/Potsdam')
+parser = argparse.ArgumentParser()
+parser.add_argument('pos_softMax', type=int)
+parser.add_argument('pos_modelIndex', type=int)
+parser.add_argument('pos_datasetIndex', type=int)
+args = parser.parse_args()
+datasetsDirectoryPath = Path('./datasets')
+datasets = [f.name for f in os.scandir(datasetsDirectoryPath) if f.is_dir()]
+dataset = datasetsDirectoryPath / (datasets[args.pos_datasetIndex])
 with open(dataset / 'dataset.json') as f:
     datasetDetails = json.load(f)
 colorDict = {}
 for i, color in enumerate(datasetDetails['LabelMapping']):
     colorDict[torch.tensor([color['R'], color['G'], color['B']])] = i
-indexToIgnore = None
+NUM_CLASSES = len(colorDict.keys())
+indexToIgnore = datasetDetails['IndexToIgnore']
 targetHeightTrain = datasetDetails['TargetImageSizeTrain']
 targetHeightVal = datasetDetails['TargetImageSizeVal']
 targetHeightTest = datasetDetails['TargetImageSizeTest']
@@ -104,7 +109,7 @@ valDataset = EarthObservationImageryDataset(valDataset, datasetDetails['NumberOf
 testDataset = EarthObservationImageryDataset(testDataset, datasetDetails['NumberOfLabelChannels'], targetHeightTest, targetWidthTest)
 inputChannels = datasetDetails['NumberOfInputChannels']
 
-TRAIN_BATCH_SIZE = 1
+TRAIN_BATCH_SIZE = 2
 VAL_BATCH_SIZE = 1
 TEST_BATCH_SIZE = 1
 LEARNING_RATE = 1e-04
@@ -320,38 +325,58 @@ class AtrousDenseUDeconvNet(nn.Module):
         x = torch.cat((x1, x), dim=1)
         x = self.l42To46(x)
         return x
-model = UNet(inputChannels, len(colorDict.keys()))
-startEpoch = 20
-softMax = True
+from torchvision.models.segmentation import deeplabv3_resnet50
+# model = deeplabv3_resnet50(num_classes=NUM_CLASSES, weights_backbone=None)
+modelDict = {0: UNet,
+             1: DeepResidualUNet,
+             2: AtrousDenseUDeconvNet
+}
+#First Arg 0 Sigmoid else SoftMax
+#Second Arg
+if args.pos_modelIndex in modelDict:
+    model = modelDict[args.pos_modelIndex](inputChannels, NUM_CLASSES)
+elif args.pos_modelIndex == 3:
+    model = deeplabv3_resnet50(num_classes=NUM_CLASSES, weights_backbone=None)
+else:
+    exit()
+softMax = bool(args.pos_softMax)
 lossType = 'Softmax' if softMax else 'Sigmoid'
 baseName = model.__class__.__name__ + '_' + lossType + dataset.name
 # checkpoint_dir = Path(f"./checkpoints/UNet_Sigmoid_ActualData_/")
-checkpoint_dir = Path(f"./checkpoints/{baseName}/")
-if startEpoch != 0 and (fileList := os.listdir(checkpoint_dir)):
+checkpoint_dir = Path(f"./checkpoints_without_background/{baseName}/")
+fileList = list(checkpoint_dir.rglob('*.pt'))
+startEpoch = len(fileList)
+TRAIN = False
+# TRAIN = startEpoch != EPOCHS
+if fileList:
     checkpoint = None
     fileList.sort()
-    stateDict = torch.load(checkpoint_dir / fileList[-1], weights_only=True)
+    stateDict = torch.load(fileList[-1], weights_only=True)
     removedKeys = ["l8To11.4.running_mean", "l8To11.4.running_var", "l8To11.4.num_batches_tracked", "l16To21.4.running_mean", "l16To21.4.running_var", "l16To21.4.num_batches_tracked"]
     for key in removedKeys:
         if key in stateDict:
             del stateDict[key]
     model.load_state_dict(stateDict)
-else:
+if TRAIN:
+    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    subDirectories = [f.name for f in os.scandir(checkpoint_dir) if f.is_dir()]
+    subDirectories.sort()
+    subDirIndex = '0'
+    if subDirectories:
+        subDirIndex = str(int(subDirectories[-1]) + 1)
     to_save = {'model': model}
-
+    globalStepTransform = lambda *_: trainer.state.epoch + startEpoch
     checkpoint = Checkpoint(
         to_save,
-        checkpoint_dir,
-        n_saved=5,
-        filename_prefix=baseName,
-        score_name='miou',
-        greater_or_equal=True,
+        checkpoint_dir / subDirIndex,
+        n_saved=EPOCHS,
+        global_step_transform=globalStepTransform
     )
 model = model.to(device)
 
 """# 4. Model Training"""
 
-lossFunction = nn.CrossEntropyLoss() if softMax else nn.BCEWithLogitsLoss()
+lossFunction = nn.CrossEntropyLoss(ignore_index=indexToIgnore) if softMax else nn.BCEWithLogitsLoss()
 optimizer = torch.optim.AdamW(params=model.parameters(), lr=LEARNING_RATE)
 
 
@@ -362,8 +387,14 @@ def train_step(engine, batch):
     labelOHE = labelOHE.to(device)
     label = label.to(device).to(torch.int64)
     optimizer.zero_grad()
-    y_pred = model(img).squeeze(1)
-    loss = lossFunction(y_pred, labelOHE)
+    if model.__class__.__name__ == 'DeepLabV3':
+        y_pred = model(img)['out']
+    else:
+        y_pred = model(img).squeeze(1)
+    if softMax:
+        loss = lossFunction(y_pred, label)
+    else:
+        loss = lossFunction(y_pred, labelOHE)
     loss.backward()
     optimizer.step()
     return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
@@ -374,8 +405,14 @@ def evaluation_step(engine, batch):
     img = img.to(device)
     labelOHE = labelOHE.to(device)
     label = label.to(device).to(torch.int64)
-    y_pred = model(img).squeeze(1)
-    loss = lossFunction(y_pred, labelOHE)
+    if model.__class__.__name__ == 'DeepLabV3':
+        y_pred = model(img)['out']
+    else:
+        y_pred = model(img).squeeze(1)
+    if softMax:
+        loss = lossFunction(y_pred, label)
+    else:
+        loss = lossFunction(y_pred, labelOHE)
     return {'loss': loss.item(), 'y_pred': y_pred, 'label': label}
 
 
@@ -604,25 +641,24 @@ class ClassWiseAccuracy(Metric):
         print(self.numExamples / torch.sum(self.numExamples))
         return self.numCorrect / self.numExamples
 
-NUM_BINS = torch.tensor(50)
+NUM_BINS = torch.tensor(15)
 trainer = Engine(train_step)
 evaluator = Engine(evaluation_step)
-cm = ConfusionMatrix(num_classes=len(colorDict.keys()), output_transform=output_transform)
-cm.attach(evaluator, 'cm')
+cm = ConfusionMatrix(num_classes=NUM_CLASSES, output_transform=output_transform)
+# cm.attach(evaluator, 'cm')
 metric = mIoU(cm, ignore_index=indexToIgnore)
 metric.attach(evaluator, 'miou')
 ECE = ExpectedCalibrationError(indexToIgnore, NUM_BINS, softMax, output_transform)
 ECE.attach(evaluator, "ECE")
 ACC = Accuracy(output_transform)
 ACC.attach(evaluator, 'acc')
-CACC = ClassWiseAccuracy(len(colorDict.keys()), device, output_transform)
-CACC.attach(evaluator, 'cacc')
-
-# SCE = StaticCalibrationError(indexToIgnore, NUM_BINS, torch.tensor(len(colorDict.keys())), output_transform)
+# CACC = ClassWiseAccuracy(len(colorDict.keys()), device, output_transform)
+# CACC.attach(evaluator, 'cacc')
+# SCE = StaticCalibrationError(indexToIgnore, NUM_BINS, torch.tensor(NUM_CLASSES), output_transform)
 # SCE.attach(evaluator, "SCE")
 # AECE = AdaptiveExpectedCalibrationError(NUM_BINS, output_transform)
 # AECE.attach(evaluator, "AECE")
-# ASCE = AdaptiveStaticCalibrationError(NUM_BINS, torch.tensor(len(colorDict.keys())), output_transform)
+# ASCE = AdaptiveStaticCalibrationError(NUM_BINS, torch.tensor(NUM_CLASSES), output_transform)
 # ASCE.attach(evaluator, "ASCE")
 @trainer.on(Events.EPOCH_COMPLETED)
 def trainer_on_epoch_completed(engine):
@@ -640,37 +676,41 @@ def evaluator_on_epoch_completed(engine):
     loss = engine.state.output['loss']
     miou = engine.state.metrics['miou']
     ece = engine.state.metrics['ECE']
-    cacc = engine.state.metrics['cacc']
-    cm = engine.state.metrics['cm']
+    # cm = engine.state.metrics['cm']
     # sce = engine.state.metrics['SCE']
     # aece = engine.state.metrics['AECE']
     # asce = engine.state.metrics['ASCE']
     acc = engine.state.metrics['acc']
-    print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}, CACC = {cacc}, cm = {cm}',
-          # f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
-          )
+    # with open(checkpoint_dir / 'results.txt', 'a') as results:
+    #     results.write(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}\n',
+    #          f', SCE = {sce}, AECE = {aece}, ASCE = {asce}'
+            # )
+    print(f'Validation: val_loss = {loss}, mIoU = {miou}, ECE = {ece}, ACC = {acc}\n')
 
-if checkpoint is not None:
+if TRAIN and checkpoint is not None:
     evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
 # ProgressBar().attach(trainer)
 # trainer.run(trainLoader, max_epochs=EPOCHS - startEpoch)
 # ProgressBar().attach(evaluator)
 model.eval()
-# evaluator.run(testLoader, max_epochs=1)
+# evaluator.run(valLoader, max_epochs=1)
 #
-# from calibrate import calibrate
-# from calibrationLoss import *
+from calibrate import calibrate
+from calibrationLoss import *
 
-# temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), ExpectedCalibrationErrorLoss(indexToIgnore, NUM_BINS, device, softMax), device, softMax, epochs=50)
-# print(temperature)
-# temperature.requires_grad_(False)
-if softMax:
-    temperature = torch.tensor(1.0, device=device)
-else:
-    temperature = torch.ones(len(colorDict.keys()), device=device)
+temperature = calibrate(model, valLoader, indexToIgnore, NUM_BINS, NUM_CLASSES, ExpectedCalibrationErrorLoss(indexToIgnore, NUM_BINS, device, softMax), device, softMax, args.pos_datasetIndex, epochs=50)
+print(temperature)
+temperature.requires_grad_(False)
+# if softMax:
+#     temperature = torch.tensor(1.0, device=device)
+# else:
+#     temperature = torch.ones(NUM_CLASSES, device=device)
 from plot import plotReliabilityDiagram
-plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, len(colorDict.keys()), checkpoint_dir, device, softMax, temperature = temperature)
+plotReliabilityDiagram(model, testLoader, indexToIgnore, NUM_BINS, NUM_CLASSES, checkpoint_dir, device, softMax, temperature = temperature)
 # from plot import plotRandomImageClassOutput
-# plotRandomImageClassOutput(model, testLoader, checkpoint_dir, device, colorDict, targetHeightTest, targetWidthTest, len(colorDict.keys()))
+# plotRandomImageClassOutput(model, testLoader, checkpoint_dir, device, colorDict, targetHeightTest, targetWidthTest, NUM_CLASSES)
 # from plot import plotUncertainty
 # plotUncertainty(model, testLoader, checkpoint_dir, device, softMax=softMax)
+# from plot import plotLearningGraph
+# plotLearningGraph(checkpoint_dir, "ACC")
+# plotLearningGraph(checkpoint_dir, "mIoU")
