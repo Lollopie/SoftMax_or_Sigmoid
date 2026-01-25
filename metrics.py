@@ -29,7 +29,6 @@ class ExpectedCalibrationError(Metric):
             confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.ignoredClass)
-        mask &= (indices != self.ignoredClass)
         y_filtered = y[mask]
         indices = indices[mask]
         correct = torch.eq(indices, y_filtered).reshape(-1)
@@ -216,7 +215,4 @@ class ClassWiseAccuracy(Metric):
             self.numExamples[classIndex] += torch.sum(torch.eq(y, classIndex))
 
     def compute(self):
-        # if torch.any(torch.eq(self.numExamples, 0)):
-        #     raise NotComputableError('ClassWiseAccuracy must have at least one example per class before it can be computed.')
-        # print(self.numExamples / torch.sum(self.numExamples))
         return self.numCorrect / self.numExamples

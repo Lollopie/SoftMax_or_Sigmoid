@@ -36,11 +36,13 @@ def transformLabel(label: torch.Tensor, colorDictionary: dict[torch.Tensor, int]
     label = label.to(torch.int64)
     label2D = label.reshape(numberOfLabelChannels, -1).transpose(0, 1)
     indexMap = label2D.reshape(-1)
+    #convert rgb labels to label index
     if numberOfLabelChannels > 1:
         indexMap = torch.zeros(label2D.shape[0])
         for color, index in colorDictionary.items():
             indexMap += torch.where(torch.all(label2D == color, dim=1), index, 0)
         indexMap = indexMap.to(torch.int64)
+
     labelOHE = nn.functional.one_hot(indexMap, num_classes=len(colorDictionary.keys())).transpose(0, 1).reshape(
         len(colorDictionary.keys()), targetHeight, targetWidth).to(torch.float16)
     return labelOHE, indexMap.reshape(targetHeight, targetWidth)
@@ -78,17 +80,15 @@ def loadDataLoaders(dataset, datasetDetails, colorDict, trainBatchSize, valBatch
     trainDataset = EarthObservationImageryDataset(trainDataset, datasetDetails['NumberOfLabelChannels'], datasetDetails['TargetHeightTrain'], datasetDetails['TargetWidthTrain'], colorDict)
     valDataset = EarthObservationImageryDataset(valDataset, datasetDetails['NumberOfLabelChannels'], datasetDetails['TargetHeightVal'], datasetDetails['TargetWidthVal'], colorDict)
     testDataset = EarthObservationImageryDataset(testDataset, datasetDetails['NumberOfLabelChannels'], datasetDetails['TargetHeightTest'], datasetDetails['TargetWidthTest'], colorDict)
-    # inputChannels = datasetDetails['NumberOfInputChannels']
     trainLoader = DataLoader(trainDataset, batch_size=trainBatchSize, shuffle=True, num_workers=0, drop_last=True)
     valLoader = DataLoader(valDataset, batch_size=valBatchSize, shuffle=False, num_workers=0, drop_last=True)
     testLoader = DataLoader(testDataset, batch_size=testBatchSize, shuffle=False, num_workers=0, drop_last=True)
     return trainLoader, valLoader, testLoader
 
-
-"""# 3. Model Setup"""
 def loadModel(model, checkpoint_dir, epochs, device, trainer):
     fileList = list(checkpoint_dir.rglob('*.pt'))
     startEpoch = len(fileList)
+    #If the same number of model checkpoints exist as models are supposed to be trained, we must not be training right now
     train = startEpoch != epochs
     checkpoint = None
     if fileList:
@@ -96,6 +96,7 @@ def loadModel(model, checkpoint_dir, epochs, device, trainer):
         stateDict = torch.load(fileList[-1], weights_only=True)
         model.load_state_dict(stateDict)
     if train:
+        #PyTorch Ignite refuses to save models in a directory already containing models, so we must create a new subdirectory every time
         checkpoint_dir.mkdir(exist_ok=True, parents=True)
         subDirectories = [f.name for f in os.scandir(checkpoint_dir) if f.is_dir()]
         subDirectories.sort()
@@ -231,7 +232,7 @@ def run(softMax, modelIndex, datasetIndex, calibrationMode):
                 )
 
     if TRAIN and checkpoint is not None:
-        evaluator.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
 
     #For Training Models
     ProgressBar().attach(trainer)
@@ -241,7 +242,7 @@ def run(softMax, modelIndex, datasetIndex, calibrationMode):
     model.eval()
     evaluator.run(testDataLoader, max_epochs=1)
     #For Model calibration
-    temperature = calibrate(model, valDataLoader, datasetDetails['IndexToIgnore'], NUM_BINS, NUM_CLASSES, ExpectedCalibrationErrorLoss(datasetDetails['IndexToIgnore'], NUM_BINS, device, softMax), device, softMax, datasetIndex, calibrationMode, epochs=50)
+    temperature = calibrate(model, valDataLoader, NUM_CLASSES, ExpectedCalibrationErrorLoss(datasetDetails['IndexToIgnore'], NUM_BINS, device, softMax), device, softMax, datasetIndex, calibrationMode, epochs=50)
     print(temperature)
     temperature.requires_grad_(False)
     #For plotting uncalibrated models

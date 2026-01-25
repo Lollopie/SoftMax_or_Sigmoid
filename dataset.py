@@ -21,6 +21,7 @@ paths = []
 for path in pathlist:
     path_in_str = path
     paths.append(path_in_str)
+#Train, Test, Val split of 60%, 20% and remainder
 trainNumber = np.ceil(len(paths) * 0.6)
 testNumber = np.ceil(len(paths) * 0.2)
 valNumber = len(paths) - trainNumber - testNumber

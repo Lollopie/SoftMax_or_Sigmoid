@@ -1,7 +1,12 @@
 import torch
 from torch import nn
 from ignite.exceptions import NotComputableError
-class ExpectedCalibrationErrorLoss(nn.Module):
+class CalibrationLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+    def compute(self):
+        raise NotImplementedError
+class ExpectedCalibrationErrorLoss(CalibrationLoss):
     def __init__(self, indexToIgnore, numBins, device, softMax):
         super().__init__()
         self.indexToIgnore = indexToIgnore
@@ -19,7 +24,6 @@ class ExpectedCalibrationErrorLoss(nn.Module):
             confidences = torch.max(torch.sigmoid(y_pred), dim=0)
         indices = confidences.indices.reshape(-1, 1)
         mask = (y != self.indexToIgnore)
-        mask &= (indices != self.indexToIgnore)
         y_filtered = y[mask]
         indices = indices[mask]
         correct = torch.eq(indices, y_filtered).reshape(-1)
@@ -34,7 +38,6 @@ class ExpectedCalibrationErrorLoss(nn.Module):
         if torch.sum(self._num_examples) == 0:
             raise NotComputableError(
                 "ExpectedCalibrationErrorLoss must have at least one example before it can be computed")
-        # Possibly set Error to 0 if no items in bin, and just require at least one sample
         ECE = torch.tensor(0.0, device=self.device)
         for bin in range(self.numBins):
             if self._num_examples[bin] == 0:
@@ -46,10 +49,10 @@ class ExpectedCalibrationErrorLoss(nn.Module):
         self._num_examples = torch.zeros(self.numBins, device=self.device)
         self._accumulated_confidence = torch.zeros(self.numBins, device=self.device)
         return ECE
-class StaticCalibrationErrorLoss(nn.Module):
+class StaticCalibrationErrorLoss(CalibrationLoss):
     def __init__(self, indexToIgnore, numBins, numClasses, device, softMax):
         super().__init__()
-        self.indexToIgnore = indexToIgnore if indexToIgnore is not None else -1
+        self.indexToIgnore = indexToIgnore
         self.numBins = numBins
         self.device = device
         self.numClasses = numClasses
@@ -65,7 +68,6 @@ class StaticCalibrationErrorLoss(nn.Module):
             confidences = torch.sigmoid(y_pred)
         indices = torch.argmax(confidences, dim=0).reshape(-1, 1)
         mask = (y != self.indexToIgnore)
-        mask &= (indices != self.indexToIgnore)
         y_filtered = y[mask]
         confidences = confidences[mask.repeat(1, self.numClasses).T].reshape(-1, self.numClasses)
         for classIndex in range(self.numClasses):
@@ -98,7 +100,7 @@ class StaticCalibrationErrorLoss(nn.Module):
         self._accumulated_confidence = torch.zeros(self.numBins, self.numClasses, device=self.device)
         return SCE
 
-class AdaptiveExpectedCalibrationErrorLoss(nn.Module):
+class AdaptiveExpectedCalibrationErrorLoss(CalibrationLoss):
     def __init__(self, numBins, device, softMax):
         super().__init__()
         self.numBins = numBins
@@ -131,7 +133,7 @@ class AdaptiveExpectedCalibrationErrorLoss(nn.Module):
                 (torch.sum(sortedData[lowerBound:upperBound, 0]) / (upperBound - lowerBound)))
         self._data = torch.empty((0, 2), device=self.device)
         return AECE
-class AdaptiveStaticCalibrationErrorLoss(nn.Module):
+class AdaptiveStaticCalibrationErrorLoss(CalibrationLoss):
     def __init__(self, numBins, numClasses, device, softMax):
         super().__init__()
         self.numBins = numBins
