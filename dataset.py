@@ -6,7 +6,7 @@ from torchvision.transforms import v2
 import numpy as np
 from pathlib import Path
 
-dataset = Path('./datasets/2025 Data Fusion RGB 224')
+dataset = Path('./datasets/Potsdam')
 with open(dataset / 'dataset.json') as f:
     datasetDetails = json.load(f)
 pathlist = (dataset / datasetDetails['InputDirectory']).rglob('*.tif')
