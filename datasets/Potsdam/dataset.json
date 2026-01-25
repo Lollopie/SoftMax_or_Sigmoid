@@ -3,9 +3,12 @@
   "InputDirectory": "Input",
   "LabelDirectory": "Label",
   "ImageSize": 6000,
-  "TargetImageSizeTrain": 256,
-  "TargetImageSizeVal": 256,
-  "TargetImageSizeTest": 256,
+  "TargetHeightTrain": 256,
+  "TargetWidthTrain": 256,
+  "TargetHeightVal": 256,
+  "TargetWidthVal": 256,
+  "TargetHeightTest": 256,
+  "TargetWidthTest": 256,
   "NumberOfImagesPerInputImage": 200,
   "NumberOfLabelChannels": 3,
   "NumberOfInputChannels": 3,
@@ -14,32 +17,38 @@
     {
       "R": 0,
       "G": 0,
-      "B": 255
+      "B": 255,
+      "Name": "Buildings"
     },
     {
       "R": 0,
       "G": 255,
-      "B": 0
+      "B": 0,
+      "Name": "Trees"
     },
     {
       "R": 0,
       "G": 255,
-      "B": 255
+      "B": 255,
+      "Name": "Low vegetation"
     },
     {
       "R": 255,
       "G": 0,
-      "B": 0
+      "B": 0,
+      "Name": "Background"
     },
     {
       "R": 255,
       "G": 255,
-      "B": 0
+      "B": 0,
+      "Name": "Cars"
     },
     {
       "R": 255,
       "G": 255,
-      "B": 255
+      "B": 255,
+      "Name": "Impervious Surfaces"
     }
   ]
 }

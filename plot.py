@@ -118,7 +118,7 @@ def plotReliabilityDiagram(model: nn.Module, testLoader, indexToIgnore, numBins,
     # Reset Previous State
     model.requires_grad_(True)
 
-def plotRandomImageClassOutput(model:nn.Module, testLoader, savePath: Path, device, colorDict, targetHeight: int, targetWidth: int, numClasses: int):
+def plotModelPrediction(model:nn.Module, testLoader, savePath: Path, device, colorDict, targetHeight: int, targetWidth: int, numClasses: int):
     #TODO: Maybe add temperature support
     colorChannels = list(colorDict.keys())[0].shape[0]
     colorTensor = torch.zeros((colorChannels, len(colorDict.keys())))
@@ -147,8 +147,7 @@ def plotRandomImageClassOutput(model:nn.Module, testLoader, savePath: Path, devi
 def uncertaintyFunctionInverse(inputTensor):
     return 1 - inputTensor
 
-def plotUncertainty(model:nn.Module, testLoader, savePath, device, uncertaintyFunction = lambda x : 1 - x, softMax = True):
-    #TODO: Maybe add temperature support
+def plotUncertaintyImage(model:nn.Module, testLoader, savePath, device, uncertaintyFunction = lambda x : 1 - x, softMax = True):
     savePath = (savePath / '{date:%Y-%m-%d_%H-%M-%S}'.format(date=datetime.datetime.now()))
     savePath.mkdir(parents=True, exist_ok=False)
     for i, batch in enumerate(tqdm(testLoader)):
