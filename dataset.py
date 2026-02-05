@@ -6,7 +6,7 @@ from torchvision.transforms import v2
 import numpy as np
 from pathlib import Path
 
-dataset = Path('./datasets/Potsdam')
+dataset = Path('./datasets/Potsdam (copy)')
 with open(dataset / 'dataset.json') as f:
     datasetDetails = json.load(f)
 pathlist = (dataset / datasetDetails['InputDirectory']).rglob('*.tif')
@@ -26,12 +26,12 @@ trainNumber = np.ceil(len(paths) * 0.6)
 testNumber = np.ceil(len(paths) * 0.2)
 valNumber = len(paths) - trainNumber - testNumber
 N = datasetDetails['NumberOfImagesPerInputImage']
-targetHeightTrain = datasetDetails['TargetImageSizeTrain']
-targetHeightVal = datasetDetails['TargetImageSizeVal']
-targetHeightTest = datasetDetails['TargetImageSizeTest']
-targetWidthTrain = datasetDetails['TargetImageSizeTrain']
-targetWidthVal = datasetDetails['TargetImageSizeVal']
-targetWidthTest = datasetDetails['TargetImageSizeTest']
+targetHeightTrain = datasetDetails['TargetHeightTrain']
+targetHeightVal = datasetDetails['TargetHeightVal']
+targetHeightTest = datasetDetails['TargetHeightTest']
+targetWidthTrain = datasetDetails['TargetWidthTrain']
+targetWidthVal = datasetDetails['TargetWidthVal']
+targetWidthTest = datasetDetails['TargetWidthTest']
 toImageTransform = v2.Compose(
     [
         v2.ToImage(),

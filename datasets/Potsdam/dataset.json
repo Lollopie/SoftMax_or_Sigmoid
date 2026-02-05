@@ -15,6 +15,12 @@
   "IndexToIgnore": 3,
   "LabelMapping": [
     {
+      "R": 255,
+      "G": 255,
+      "B": 255,
+      "Name": "Impervious Surfaces"
+    },
+    {
       "R": 0,
       "G": 0,
       "B": 255,
@@ -23,20 +29,14 @@
     {
       "R": 0,
       "G": 255,
-      "B": 0,
-      "Name": "Trees"
-    },
-    {
-      "R": 0,
-      "G": 255,
       "B": 255,
       "Name": "Low vegetation"
     },
     {
-      "R": 255,
-      "G": 0,
+      "R": 0,
+      "G": 255,
       "B": 0,
-      "Name": "Background"
+      "Name": "Trees"
     },
     {
       "R": 255,
@@ -46,9 +46,9 @@
     },
     {
       "R": 255,
-      "G": 255,
-      "B": 255,
-      "Name": "Impervious Surfaces"
+      "G": 0,
+      "B": 0,
+      "Name": "Background"
     }
   ]
 }

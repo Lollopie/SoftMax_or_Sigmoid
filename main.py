@@ -4,7 +4,7 @@ import os
 import rasterio
 from ignite.engine import Engine
 from ignite.handlers import ProgressBar, Checkpoint
-from ignite.metrics import ConfusionMatrix
+from ignite.metrics import ConfusionMatrix, Precision, Recall
 from ignite.metrics import mIoU
 from ignite.metrics import Accuracy
 from ignite.engine import Events
@@ -121,9 +121,9 @@ def modelOutputFilter(y_pred, label, indexToIgnore):
     numClasses = y_pred.shape[1]
     height = y_pred.shape[2]
     width = y_pred.shape[3]
-    label = label[mask].reshape(batchSize, -1)
-    y_pred = y_pred[mask.repeat(numClasses, 1, 1).reshape(1, numClasses, height, width)].reshape(
-        batchSize, numClasses, -1)
+    label = label[mask].reshape(1, -1)
+    y_pred = y_pred[mask.reshape(batchSize, 1, height, width).repeat(1,numClasses, 1, 1).reshape(batchSize, numClasses, height, width)].reshape(
+        1, numClasses, -1)
     return y_pred, label
 
 def output_transform(output):
@@ -235,31 +235,28 @@ def run(softMax, modelIndex, datasetIndex, calibrationMode):
         trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint)
 
     #For Training Models
-    ProgressBar().attach(trainer)
-    trainer.run(trainDataLoader, max_epochs=EPOCHS - startEpoch)
-    #For Testing Models
+    # ProgressBar().attach(trainer)
+    # trainer.run(trainDataLoader, max_epochs=EPOCHS - startEpoch)
+    # For Testing Models
     ProgressBar().attach(evaluator)
     model.eval()
     evaluator.run(testDataLoader, max_epochs=1)
     #For Model calibration
-    temperature = calibrate(model, valDataLoader, NUM_CLASSES, ExpectedCalibrationErrorLoss(datasetDetails['IndexToIgnore'], NUM_BINS, device, softMax), device, softMax, datasetIndex, calibrationMode, epochs=50)
-    print(temperature)
-    temperature.requires_grad_(False)
+    # temperature = calibrate(model, valDataLoader, NUM_CLASSES, ExpectedCalibrationErrorLoss(datasetDetails['IndexToIgnore'], NUM_BINS, device, softMax), device, softMax, datasetIndex, calibrationMode, epochs=50)
+    # print(temperature)
+    # temperature.requires_grad_(False)
     #For plotting uncalibrated models
-    if softMax:
-        temperature = torch.tensor(1.0, device=device)
-    else:
-        temperature = torch.ones(NUM_CLASSES, device=device)
+    # temperature = torch.tensor(1.0, device=device)
 
-    from plot import plotReliabilityDiagram
-    plotReliabilityDiagram(model, testDataLoader, datasetDetails['IndexToIgnore'], NUM_BINS, NUM_CLASSES, checkpoint_dir, device, softMax, temperature = temperature)
-    from plot import plotModelPrediction
-    plotModelPrediction(model, testDataLoader, checkpoint_dir, device, colorDict, datasetDetails['TargetHeightTest'], datasetDetails['TargetWidthTest'], NUM_CLASSES)
-    from plot import plotUncertaintyImage
-    plotUncertaintyImage(model, testDataLoader, checkpoint_dir, device, softMax=softMax)
-    from plot import plotLearningGraph
-    plotLearningGraph(checkpoint_dir, "ACC")
-    plotLearningGraph(checkpoint_dir, "mIoU")
+    # from plot import plotReliabilityDiagram
+    # plotReliabilityDiagram(model, testDataLoader, datasetDetails['IndexToIgnore'], NUM_BINS, NUM_CLASSES, checkpoint_dir, device, softMax, temperature = temperature)
+    # from plot import plotModelPrediction
+    # plotModelPrediction(model, testDataLoader, checkpoint_dir, device, colorDict, datasetDetails['TargetHeightTest'], datasetDetails['TargetWidthTest'], NUM_CLASSES)
+    # from plot import plotUncertaintyImage
+    # plotUncertaintyImage(model, testDataLoader, checkpoint_dir, device, colorDict, softMax=softMax)
+    # from plot import plotLearningGraph
+    # plotLearningGraph(checkpoint_dir, "ACC")
+    # plotLearningGraph(checkpoint_dir, "mIoU")
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('pos_softMax', type=int)

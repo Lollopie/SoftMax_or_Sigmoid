@@ -125,24 +125,45 @@ def plotModelPrediction(model:nn.Module, testLoader, savePath: Path, device, col
         torchvision.utils.save_image(result / 255.0, savePath / str(i) / 'result.png')
         torchvision.utils.save_image(original / 255.0, savePath / str(i) / 'original.png')
 
-def plotUncertaintyImage(model:nn.Module, testLoader, savePath, device, uncertaintyFunction = lambda x : 1 - x, softMax = True):
+def plotUncertaintyImage(model:nn.Module, testLoader, savePath, device, colorDict, uncertaintyFunction = lambda x : 1 - x, softMax = True):
     savePath = (savePath / '{date:%Y-%m-%d_%H-%M-%S}'.format(date=datetime.datetime.now()))
     savePath.mkdir(parents=True, exist_ok=False)
+    colorChannels = list(colorDict.keys())[0].shape[0]
+    colorTensor = torch.zeros((colorChannels, len(colorDict.keys())))
+    for i, color in enumerate(colorDict.keys()):
+        colorTensor[:, i] = color
+    colorTensor = colorTensor.to(device)
+    for i, color in enumerate(colorDict.keys()):
+        colorTensor[:, i] = color
     for i, batch in enumerate(tqdm(testLoader)):
         image = batch['img'].to(device)
+        labelOHE = batch['label'][0].to(device)
         y_pred = model(image)
         if softMax:
             y_pred = torch.softmax(y_pred, dim=1)
         else:
             y_pred = torch.sigmoid(y_pred)
+        classMap = torch.argmax(y_pred, dim=1).squeeze(0)
+        classMap = classMap.reshape(-1)
+        classMapOHE = nn.functional.one_hot(classMap, len(colorDict.keys())).T.to(torch.float)
+        # Convert Class Map from class index to RGB
+        result = (colorTensor @ classMapOHE).reshape(colorChannels, image.shape[-2], image.shape[-1])
         confidenceMap = torch.max(y_pred, dim=1).values
         uncertaintyMap = uncertaintyFunction(confidenceMap)
         fig, ax = plt.subplots()
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
+        ax.set_axis_off()
+        # divider = make_axes_locatable(ax)
+        # cax = divider.append_axes('right', size='5%', pad=0.05)
         im = ax.imshow(uncertaintyMap.squeeze(0).cpu().detach().numpy(), cmap='seismic', vmin=0, vmax=1)
-        fig.colorbar(im, cax=cax, orientation='vertical')
-        plt.savefig(savePath / f'{i}.png')
+        # fig.colorbar(im, cax=cax, orientation='vertical')
+        (savePath / str(i)).mkdir(parents=True, exist_ok=False)
+        labelOHE = labelOHE.reshape(len(colorDict.keys()), -1).to(torch.float)
+        original = (colorTensor @ labelOHE).reshape(colorChannels, image.shape[-2], image.shape[-1])
+        inputImage = image
+        torchvision.utils.save_image(inputImage, savePath / str(i) / 'input.png')
+        torchvision.utils.save_image(original / 255.0, savePath / str(i) / 'original.png')
+        torchvision.utils.save_image(result / 255.0, savePath / str(i) / 'result.png')
+        plt.savefig(savePath / str(i) / 'uncertainty.png', bbox_inches='tight', pad_inches=0.0)
         plt.close(fig)
 
 def plotLearningGraph(basePath: Path, propertyName: str):
