@@ -1,4 +1,7 @@
 # SoftMax or Sigmoid
+<div style="text-align: center;">
+    <img src="Example.png" alt="Example Image" width="700"/>
+</div>
 
 ## Usage
 Project developed using Python 3.10 and PyTorch 2.8.0.
