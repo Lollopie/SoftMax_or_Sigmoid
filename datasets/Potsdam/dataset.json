@@ -12,7 +12,7 @@
   "NumberOfImagesPerInputImage": 200,
   "NumberOfLabelChannels": 3,
   "NumberOfInputChannels": 3,
-  "IndexToIgnore": 3,
+  "IndexToIgnore": 5,
   "LabelMapping": [
     {
       "R": 255,
